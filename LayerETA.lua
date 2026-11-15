@@ -428,10 +428,11 @@ do
   local mid = part("PanelMid"); mid:SetPoint("TOPLEFT", top, "BOTTOMLEFT"); mid:SetPoint("BOTTOMRIGHT", bot, "TOPRIGHT")
 end
 -- toppen (altid synlig): logo, "Layer A" og en linje under
-local mIcon = f:CreateTexture(nil, "ARTWORK"); mIcon:SetSize(20, 20); mIcon:SetPoint("TOPLEFT", 11, -10); mIcon:SetTexture(TEX .. "Logo")
-local mTop = fs(f, F_BOLD, 12); mTop:SetPoint("TOPLEFT", 38, -8); mTop:SetTextColor(0.91, 0.92, 0.94)
-local mSub = fs(f, F_SEMI, 10); mSub:SetPoint("TOPLEFT", 38, -23); mSub:SetTextColor(0.55, 0.58, 0.64)
-mSub:SetWidth(W - 46); mSub:SetJustifyH("LEFT"); if mSub.SetWordWrap then mSub:SetWordWrap(false) end
+-- Mark er logoet uden ring: ringen aeder for meget ved denne stoerrelse
+local mIcon = f:CreateTexture(nil, "ARTWORK"); mIcon:SetSize(26, 26); mIcon:SetPoint("TOPLEFT", 8, -8); mIcon:SetTexture(TEX .. "Mark")
+local mTop = fs(f, F_BOLD, 12); mTop:SetPoint("TOPLEFT", 40, -8); mTop:SetTextColor(0.91, 0.92, 0.94)
+local mSub = fs(f, F_SEMI, 10); mSub:SetPoint("TOPLEFT", 40, -23); mSub:SetTextColor(0.55, 0.58, 0.64)
+mSub:SetWidth(W - 48); mSub:SetJustifyH("LEFT"); if mSub.SetWordWrap then mSub:SetWordWrap(false) end
 
 -- det udfoldede: liste over lag i denne zone, status og en lille knap
 local sep = f:CreateTexture(nil, "ARTWORK"); sep:SetHeight(1); sep:SetColorTexture(1, 1, 1, 0.06)
