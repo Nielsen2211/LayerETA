@@ -452,7 +452,9 @@ for i = 1, HIST_MAX do
   r:SetScript("OnLeave", function(self) self.hl:Hide() end)
   r:SetScript("OnClick", function(self)
     if not self.key or (cur and self.key == cur.key) then return end
+    if target == self.key and not swap then target = nil; refresh(); return end
     target = self.key
+    if swap then endSwap(nil, 1) end
     requestSwap()
   end)
   rows[i] = r
@@ -483,7 +485,16 @@ btn:SetScript("OnEnter", function() btn.over = true; paintBtn() end)
 btn:SetScript("OnLeave", function() btn.over = false; paintBtn(); btxt:SetPoint("CENTER", 0, 0) end)
 btn:SetScript("OnMouseDown", function() btxt:SetPoint("CENTER", 0, -1) end)
 btn:SetScript("OnMouseUp", function() btxt:SetPoint("CENTER", 0, 0) end)
-btn:SetScript("OnClick", function() if not swap then target = nil end; requestSwap() end)
+-- Venstreklik skifter, og har du valgt et lag i listen, er det dét lag, den beder om.
+-- Hoejreklik glemmer det valgte lag, saa knappen beder om et hvilket som helst lag igen.
+btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+btn:SetScript("OnClick", function(_, button)
+  if button == "RightButton" then
+    if not swap then target = nil; refresh() end
+    return
+  end
+  requestSwap()
+end)
 paintBtn()
 
 local full = { sep, hLabel, status, btn }
@@ -528,7 +539,8 @@ refresh = function()
       if item then
         n = i
         r.key = item.key
-        r.lt:SetText(letter(item.key)); r.lt:SetTextColor(0.75, 0.78, 0.84)
+        r.lt:SetText(letter(item.key))
+        if target == item.key then r.lt:SetTextColor(1, 0.82, 0.32) else r.lt:SetTextColor(0.75, 0.78, 0.84) end
         r.tt:SetText(date("%H:%M", item.t))
         r:Show()
       else
@@ -578,6 +590,7 @@ E:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   elseif ev == "PLAYER_TARGET_CHANGED" then observe("target")
   elseif ev == "NAME_PLATE_UNIT_ADDED" then if str(a1) then observe(a1) end
   elseif ev == "ZONE_CHANGED_NEW_AREA" then
+    if not swap then target = nil end
     cur = nil; observe("target"); refresh()  -- laget er zonens: laes det igen i den nye zone
   elseif ev == "SHARD_TRANSFER" then
     -- spillet har flyttet os: det gamle lag gaelder ikke mere, laes det nye fra en NPC
@@ -608,6 +621,20 @@ C_Timer.NewTicker(1, function()
   end
   local now = GetTime()
   if s.joinedAt then
+    -- mens vi venter paa flytningen, laeser vi laget igen hvert sekund fra alt omkring dig.
+    -- Ellers opdager vi foerst skiftet, naar du selv peger paa en NPC.
+    if not s.moved then
+      observe("target"); observe("mouseover")
+      if C_NamePlate and C_NamePlate.GetNamePlates then
+        local ok, plates = pcall(C_NamePlate.GetNamePlates)
+        if ok and type(plates) == "table" then
+          for _, pl in ipairs(plates) do
+            local unit = type(pl) == "table" and (pl.namePlateUnitToken or (pl.UnitFrame and pl.UnitFrame.unit))
+            if str(unit) then observe(unit) end
+          end
+        end
+      end
+    end
     if s.moved then
       if now >= (s.leaveAt or 0) then
         local key = cur and cur.key
