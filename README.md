@@ -1,51 +1,36 @@
 # LayerETA
 
-**LayerETA shows which layer you are on and swaps layer with one click. You never host.**
+**LayerETA swaps layer with one click. You never host.**
 
 Part of the ETA family with [LevelETA](https://github.com/Nielsen2211/LevelETA) and [GoldETA](https://github.com/Nielsen2211/GoldETA). Same look, and each works on its own.
 
 ![LayerETA](screenshots/layereta-window.png)
 
-- **Your layer at a glance**: a small box that says *Layer A*, *Layer B* and so on
-- **One button**: click the box to fold it out, then click **Swap layer**
-- **No hosting**: you only ask for a swap, you never invite others
-- **Sends nothing on its own**: your request is placed in your chat box, and you send it yourself with Enter
-- **Cleans up after itself**: accepts the invite, waits for the move and leaves the group again
+## Blizzard's change of 20 November 2026
 
----
+Since a hotfix on 20 November 2026, WoW Forever hides the realm from addons: where the game used to give the realm name or ID, it now gives an empty name or 0. That realm ID inside the NPCs' IDs was the only way any addon could tell one layer from another. So since that day **no layer addon can see which layer you are on**, LayerSwap included, and nobody can ask for one layer in particular.
 
-## How to use it
+LayerETA 3.8 works with this:
 
-1. Join the layer channel once: `/join layer`
-2. Target or mouse over any NPC, so LayerETA can read your layer
-3. Click the box to fold it out, and click **Swap layer**
-4. Press **Enter** to send the request that is waiting in your chat box
-5. A host on another layer invites you. LayerETA accepts, and leaves the group 20 seconds after you have moved
+- **No layer letters, no list of layers and no "Back to A"** while the game hides layers. If Blizzard shows them again, they come back by themselves.
+- **Swap still works**: it moves you to another layer than the one you stand on. You don't need to target an NPC first.
+- **10 swaps an hour**: the game moves a character at most ten times an hour. LayerETA counts them per character (also across a login), tells you when 3 are left, and once they are used up the button shows *Wait* with the time left.
 
-Click the box again to fold it back. Drag it to move it.
+## How a swap works now
 
-## How it knows your layer
+1. Click the box to fold it out, then click **Swap**.
+2. LayerETA looks up the players in your zone and sends your request straight to them, in the format LayerSwap uses, so players hosting with LayerSwap, Bulo or Simple Layer can invite you. Nothing goes into your chat or the layer channel.
+3. A host invites you and LayerETA accepts.
+4. **Moved?** When the game moves you to another layer it tells addons so (`SHARD_TRANSFER`). LayerETA counts one swap and leaves the group 4 seconds later.
+5. **Not moved?** Hosts can't see layers either, so now and then a host on your own layer invites you. If the game hasn't moved you within 8 seconds, LayerETA leaves the group, tells you, and that swap isn't counted.
 
-The game does not tell addons which layer you are on. LayerETA reads it from the id of the NPCs around you, the same way other layer addons do. It gives each layer in a zone a letter, so you see *Layer B* instead of a long number. The letters start over every day.
-
-## Works with other layer addons
-
-The request uses the same format as LayerSwap, so players who host with LayerSwap (and addons that speak the same format) can invite you. You do not need any of them installed.
+You can't pick a layer or go back to one you were on, and you can land on a layer you've been on before. That is the game's limit now, for every addon.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/leta` | Show or hide the box |
-| `/leta swap` | Same as the Swap layer button |
-| `/leta lock` | Lock or unlock the position |
-| `/leta leave <seconds>` | How long to stay in the group after the move (default 20) |
-| `/leta da` or `/leta en` | Danish or English |
-
-## Install
-
-Get it from CurseForge, or download this repo and put the folder in `World of Warcraft/_forever_/Interface/AddOns/LayerETA`.
-
-## License
-
-MIT. The Inter font is under the SIL Open Font License, see `Fonts/LICENSE-Inter.txt`.
+- `/leta` show or hide the box
+- `/leta swap` same as the Swap button
+- `/leta lock` lock or unlock the position
+- `/leta leave <seconds>` how long to stay in the group after the move
+- `/leta debug` what the addon can see right now (swaps left, and when the game last moved you)
+- `/leta da` or `/leta en` Danish or English
