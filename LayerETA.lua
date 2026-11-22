@@ -20,12 +20,12 @@ local F_BOLD = PATH .. "Fonts\\Inter-Bold.ttf"
 local PREFIX = "LayerSwap"   -- det prefix hosts lytter paa
 local BOOK_TTL = 7 * 86400   -- kendte hosts huskes en uge og spoerges foerst
 local ASK_TTL = 60           -- saa laenge venter et klik paa en invite
-local NO_MOVE_LEAVE = 15     -- joinet, men ikke flyttet efter saa mange sekunder: forlad gruppen
+local NO_MOVE_LEAVE = 8      -- joinet, men ikke flyttet efter saa mange sekunder: forlad gruppen (no move used)
 local COOLDOWN = 5
 local DB
 
 local LOC = {
-  en = { layer = "Layer", unknown = "Target an NPC", swap = "Swap", stop = "Stop", back = "Back to %s", seen = "Layers here", goingTo = "Looking for %s",
+  en = { movedNew = "Moved to another layer", left = "%d of 10 swaps left this hour", wait = "No swaps left: wait %s", fewLeft = "%d swaps left this hour.", blindSub = "Layers can't be told apart on Forever", layer = "Layer", unknown = "Target an NPC", swap = "Swap", stop = "Stop", back = "Back to %s", seen = "Layers here", goingTo = "Looking for %s",
     needNpc = "Target or mouse over an NPC first, so your layer is known.", inGroup = "You are in a group. Leave it to swap layer.",
     inInstance = "No layers in here. Swap layer works in the open world.", pressEnter = "Press Enter to send your request", sent = "Asking, waiting for an invite", joinChan = "Join the layer channel first: type /join layer",
     asking = "Asking %d players", heard = "Waiting, %d heard", nobody = "Found nobody to ask. Try again in a moment.", noSearch = "The player search is not available on this client.", asked = "Asked %d players",
@@ -34,7 +34,7 @@ local LOC = {
     notMoved = "%s is on your layer. Left the group.", whoFail = "The player search did not start. Try again in a moment.",
     stopped = "Stopped", hint = "Click: open or close  ·  Drag: move", acceptHint = "Accept the invite from %s", locked = "Window locked", unlocked = "Window unlocked",
     help = "/leta: show or hide  ·  /leta swap  ·  /leta lock  ·  /leta debug  ·  /leta leave <seconds>  ·  /leta da|en" },
-  da = { layer = "Lag", unknown = "Målret en NPC", swap = "Skift", stop = "Stop", back = "Tilbage til %s", seen = "Lag her", goingTo = "Leder efter %s",
+  da = { movedNew = "Flyttet til et andet lag", left = "%d af 10 skift tilbage denne time", wait = "Ingen skift tilbage: vent %s", fewLeft = "%d skift tilbage denne time.", blindSub = "Lag kan ikke skelnes på Forever", layer = "Lag", unknown = "Målret en NPC", swap = "Skift", stop = "Stop", back = "Tilbage til %s", seen = "Lag her", goingTo = "Leder efter %s",
     needNpc = "Målret eller hold musen over en NPC først, så dit lag er kendt.", inGroup = "Du er i en gruppe. Forlad den for at skifte lag.",
     inInstance = "Ingen lag herinde. Skift lag virker ude i verden.", pressEnter = "Tryk Enter for at sende din anmodning", sent = "Spørger, venter på en invitation", joinChan = "Gå ind i layer-kanalen først: skriv /join layer",
     asking = "Spørger %d spillere", heard = "Venter, %d har hørt", nobody = "Fandt ingen at spørge. Prøv igen om lidt.", noSearch = "Spillerssøgningen virker ikke på denne klient.", asked = "Spurgte %d spillere",
@@ -77,6 +77,8 @@ local function mapPos(zone)
   if type(x) == "number" and type(y) == "number" and x > 0 and y > 0 then return x, y end
 end
 
+local lastShard    -- when the game last said it moved us (SHARD_TRANSFER)
+local blind = true -- true: the game hides which layer you are on (Forever since 20 Nov 2026); false once a GUID shows one
 local target       -- laget du vil tilbage til, naar du klikker en linje i listen
 local cur          -- {id = "6843-8", key = "6843", at = tid}
 local swap         -- det igangvaerende skift
@@ -125,12 +127,17 @@ local function setStatus(text, secs)
 end
 
 local onMoved
+local swapsLeft, waitText
 local function observe(unit)
   if not UnitGUID then return end
   local ok, guid = pcall(UnitGUID, unit)
   if not ok or not str(guid) then return end
   local kind, _, server, _, zoneUID = strsplit("-", guid)
   if (kind ~= "Creature" and kind ~= "Vehicle") or not server or not zoneUID then return end
+  -- Forever, since the hotfix of 20 November 2026: the game hides the realm in every GUID (0), so no
+  -- addon can tell one layer from another any more. Then LayerETA shows no layer and asks for none.
+  if server == "0" or server == "" then blind = true; return end
+  blind = false
   if type(UnitPlayerControlled) == "function" then  -- totems og pets baerer id'et fra det sted, de blev lavet
     local okP, pc = pcall(UnitPlayerControlled, unit)
     if okP and not secret(pc) and pc == true then return end
@@ -144,6 +151,36 @@ local function observe(unit)
     if swap and swap.joinedAt and swap.fromKey and key ~= swap.fromKey then onMoved() end
     refresh()
   end
+end
+
+-- ---------- ten moves an hour ----------
+-- The game moves a character to another layer at most ten times an hour on Forever. LayerETA counts
+-- the moves of each character (also across a login), and once they are used up the button waits.
+local HOUR, PER_HOUR = 3600, 10
+local function charKey()
+  local n, r = UnitName and UnitName("player"), GetRealmName and GetRealmName()
+  return (str(n) and n or "?") .. "-" .. (str(r) and r or "")
+end
+local function moves()
+  DB.moves = DB.moves or {}
+  local list = DB.moves[charKey()] or {}
+  local now, keep = time(), {}
+  for _, t in ipairs(list) do if now - t < HOUR then keep[#keep + 1] = t end end
+  DB.moves[charKey()] = keep
+  return keep
+end
+swapsLeft = function() return math.max(0, PER_HOUR - #moves()) end
+waitText = function()
+  local list = moves()
+  if #list < PER_HOUR then return "0:00" end
+  local secs = math.max(0, HOUR - (time() - list[1]))
+  return string.format("%d:%02d", math.floor(secs / 60), secs % 60)
+end
+local function noteMove()
+  local list = moves()
+  list[#list + 1] = time()
+  local left = swapsLeft()
+  if left == 3 then print("|cffffd24aLayerETA|r: " .. string.format(T("fewLeft"), left)) end
 end
 
 -- ---------- huskeliste: hvem er spurgt, og hvem er hosts ----------
@@ -166,6 +203,7 @@ end
 
 onMoved = function()
   if not swap or swap.moved then return end
+  noteMove()
   if target and cur and cur.key ~= target then
     -- flyttet, men ikke til det lag du ville tilbage til: bliv staaende og lad brugeren klikke igen
     swap.moved = true
@@ -324,7 +362,7 @@ local function requestSwap()
   if now - lastClick < COOLDOWN then return end
   if IsInInstance and select(1, IsInInstance()) then setStatus(T("inInstance"), 8); return end
   if IsInGroup and IsInGroup() then setStatus(T("inGroup"), 8); return end
-  if not cur then setStatus(T("needNpc"), 8); return end
+  if swapsLeft() <= 0 then setStatus(string.format(T("wait"), waitText()), 8); return end
   if not Who.ready() then setStatus(T("noSearch"), 10); return end
   lastClick = now
   local zone = zoneMap()
@@ -335,7 +373,7 @@ local function requestSwap()
   local want = target and histId(target) or nil
   if want then
     parts[#parts + 1] = "want " .. want
-  else
+  elseif cur then
     parts[#parts + 1] = "not " .. cur.id
     for _, item in ipairs(histFor()) do
       if type(item) == "table" and type(item.id) == "string" and item.key ~= cur.key then
@@ -351,7 +389,7 @@ local function requestSwap()
   -- soegningen finder i din zone, praecis som LayerSwap goer det.
   if not Who.ask(line) then setStatus(T("noSearch"), 10); return end
 
-  local s = { at = now, zone = zone, fromKey = cur.key, heard = 0 }
+  local s = { at = now, zone = zone, fromKey = cur and cur.key, heard = 0 }
   swap = s
   refresh()
   C_Timer.After(ASK_TTL, function()
@@ -506,7 +544,7 @@ refresh = function()
   local s, text = swap, nil
   if s then
     if s.moved then
-      text = string.format(T("moved"), cur and (T("layer") .. " " .. letter(cur.key)) or "?") .. ". " .. string.format(T("leaving"), math.max(0, math.ceil((s.leaveAt or 0) - GetTime())))
+      text = (cur and string.format(T("moved"), T("layer") .. " " .. letter(cur.key)) or T("movedNew")) .. ". " .. string.format(T("leaving"), math.max(0, math.ceil((s.leaveAt or 0) - GetTime())))
     elseif s.joinedAt then text = T("joined")
     elseif s.inviter then text = string.format(s.manual and T("acceptHint") or T("invited"), s.inviter)
     elseif s.heard > 0 then text = string.format(T("heard"), s.heard)
@@ -522,11 +560,11 @@ refresh = function()
     for _, x in ipairs(full) do x:SetShown(open) end
     if not open then for _, r in ipairs(rows) do r:Hide() end end
   end
-  mTop:SetText(T("layer") .. " " .. (cur and letter(cur.key) or "?"))
+  mTop:SetText(blind and "LayerETA" or (T("layer") .. " " .. (cur and letter(cur.key) or "?")))
   if cur then mTop:SetTextColor(0.62, 0.82, 1) else mTop:SetTextColor(0.91, 0.92, 0.94) end
   local h = 40
   if open then
-    mSub:SetText(cur and "LayerETA" or T("unknown"))
+    mSub:SetText(blind and string.format(T("left"), swapsLeft()) or (cur and "LayerETA" or T("unknown")))
     hLabel:SetText(T("seen"))
     -- listen: de lag du har vaeret paa i denne zone, nyeste oeverst
     local hist, list = histFor(), {}
@@ -553,13 +591,14 @@ refresh = function()
     status:SetPoint("TOPLEFT", 12, -y); status:SetPoint("TOPRIGHT", -12, -y)
     status:SetText(text or "")
     local stop = (s and not s.joinedAt) and true or false
-    btxt:SetText(stop and T("stop") or (target and string.format(T("back"), letter(target)) or T("swap")))
+    local used = not s and swapsLeft() <= 0
+    btxt:SetText(stop and T("stop") or (used and ("Wait " .. waitText())) or (target and string.format(T("back"), letter(target)) or T("swap")))
     btn:SetWidth(math.max(BTN_W, (btxt:GetStringWidth() or 40) + 26))
     if btn.stop ~= stop then btn.stop = stop; paintBtn() end
     h = y + 22 + 10
     if text then h = h + math.max(11, status:GetStringHeight() or 11) + 6 end
   else
-    mSub:SetText(text or (cur and "LayerETA") or T("unknown"))
+    mSub:SetText(text or (blind and string.format(T("left"), swapsLeft())) or (cur and "LayerETA") or T("unknown"))
   end
   if f._h ~= h then f._h = h; f:SetHeight(h) end
 end
@@ -593,6 +632,7 @@ E:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
     if not swap then target = nil end
     cur = nil; observe("target"); refresh()  -- laget er zonens: laes det igen i den nye zone
   elseif ev == "SHARD_TRANSFER" then
+    lastShard = GetTime()
     -- spillet har flyttet os: det gamle lag gaelder ikke mere, laes det nye fra en NPC
     cur = nil
     if swap and swap.joinedAt then onMoved() end
@@ -608,7 +648,7 @@ E:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
       refresh()
     end
   elseif ev == "GROUP_LEFT" then
-    if swap and swap.joinedAt then endSwap(swap.moved and string.format(T("moved"), cur and (T("layer") .. " " .. letter(cur.key)) or "?") or nil, 10) end
+    if swap and swap.joinedAt then endSwap(swap.moved and (cur and string.format(T("moved"), T("layer") .. " " .. letter(cur.key)) or T("movedNew")) or nil, 10) end
   end
 end)
 
@@ -617,6 +657,8 @@ C_Timer.NewTicker(1, function()
   local s = swap
   if not s then
     if DB and DB._statusUntil and GetTime() > DB._statusUntil then DB._status, DB._statusUntil = nil, nil; refresh() end
+    -- the Wait timer on the button, and the swaps that come back after an hour
+    if DB and swapsLeft() < PER_HOUR and math.floor(GetTime()) % 5 == 0 then refresh() end
     return
   end
   local now = GetTime()
@@ -638,7 +680,7 @@ C_Timer.NewTicker(1, function()
     if s.moved then
       if now >= (s.leaveAt or 0) then
         local key = cur and cur.key
-        swap = nil; leaveGroup(); setStatus(string.format(T("moved"), T("layer") .. " " .. letter(key)), 15)
+        swap = nil; leaveGroup(); setStatus(key and string.format(T("moved"), T("layer") .. " " .. letter(key)) or T("movedNew"), 15)
       else refresh() end
     elseif now - s.joinedAt > NO_MOVE_LEAVE then
       local who = s.inviter or "?"
@@ -657,7 +699,8 @@ SlashCmdList.LAYERETA = function(msg)
   elseif msg == "debug" then
     print("|cffffd24aLayerETA|r debug:")
     print("  player search: " .. tostring(Who.ready()) .. "   asking now: " .. tostring(Who.pending ~= nil))
-    print("  your layer: " .. (cur and (cur.id .. " = " .. letter(cur.key)) or "unknown, target an NPC"))
+    print("  your layer: " .. (blind and "hidden by the game (realm 0 in GUIDs)" or (cur and (cur.id .. " = " .. letter(cur.key)) or "unknown, target an NPC")))
+    print("  swaps left this hour: " .. swapsLeft() .. "   last move seen: " .. (lastShard and string.format("%ds ago", GetTime() - lastShard) or "none"))
     print("  zone map id: " .. tostring(zoneMap()))
     print("  in a group: " .. tostring(IsInGroup and IsInGroup()) .. "   in an instance: " .. tostring(IsInInstance and select(1, IsInInstance())))
     print("  swap running: " .. tostring(swap ~= nil) .. "   want back to: " .. tostring(target))
