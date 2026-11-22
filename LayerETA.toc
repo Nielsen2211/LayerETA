@@ -3,7 +3,7 @@
 ## Notes: Shows the layer you are on and swaps layer with one click. No hosting. Works with LayerSwap, Bulo and Simple Layer hosts.
 ## Notes-daDK: Viser hvilket lag du er på, og skifter lag med et klik. Ingen hosting. Virker med hosts fra LayerSwap, Bulo og Simple Layer.
 ## Author: Rasmus
-## Version: 3.8
+## Version: 3.9
 ## IconTexture: Interface\AddOns\LayerETA\Textures\Logo
 ## SavedVariables: LayerETADB
 LayerETA.lua
