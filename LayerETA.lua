@@ -40,10 +40,10 @@ local TEXT = {
     fighting = "Not during combat. Try again in a few seconds.",
     noRoute = "No way to ask: the LayerETA channel is not ready and you are not in the layer channel (/join layer).",
     othersOn = "Swap also asks other hosts in your zone for an invite.", othersOff = "Swap no longer asks other hosts in your zone.", othersAsked = "Looking for a host (asked %d players)",
-    hint = "Click: big or small view\nDrag: move", mmTip = "Left-click: show or hide\nRight-click: big or small view\nDrag: move this button", mmOn = "Minimap button shown.", mmOff = "Minimap button hidden. /leta minimap brings it back.", locked = "Box locked", unlocked = "Box unlocked",
+    hint = "Click: big or small view\nRight-click: settings\nDrag: move", mmTip = "Left-click: show or hide\nRight-click: settings\nDrag: move this button", settings = "Settings", sSwap = "Swapping", sBox = "Box", optOthers = "Ask other hosts in my zone", optChannel = "Write \"inv\" in the layer channel", optLock = "Lock position", optMinimap = "Minimap button", langName = "Language: English", doneBtn = "Done", mmOn = "Minimap button shown.", mmOff = "Minimap button hidden. /leta minimap brings it back.", locked = "Box locked", unlocked = "Box unlocked",
     hostNowOn = "You now invite LayerETA users in your zone who want another layer.", hostNowOff = "You no longer host.",
     chanOn = "Swap also writes \"inv\" in the layer channel.", chanOff = "Swap no longer writes in the layer channel.",
-    help = "/leta: show or hide  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta minimap  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
+    help = "/leta: show or hide  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta config  ·  /leta lock  ·  /leta minimap  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
   },
   da = {
     title = "LayerETA", swap = "Skift", swapLayer = "Skift lag", stop = "Stop", ready = "Klar", swapping = "Skifter", newSince = "Nyt lag siden %s", spentShort = "Næste skift om %s", waitShort = "Vent", stepAsk = "Spørg", stepInvite = "Invite", stepMove = "Flyt", hourLabel = "Skift denne time", small = "Lille visning", bigView = "Stor visning",
@@ -58,10 +58,10 @@ local TEXT = {
     fighting = "Ikke i kamp. Prøv igen om et par sekunder.",
     noRoute = "Kan ikke spørge: LayerETA kanalen er ikke klar, og du er ikke i layer kanalen (/join layer).",
     othersOn = "Skift spørger også andre hosts i zonen om en invite.", othersOff = "Skift spørger ikke længere andre hosts i zonen.", othersAsked = "Leder efter en host (spurgte %d spillere)",
-    hint = "Klik: stor eller lille visning\nTræk: flyt", mmTip = "Venstreklik: vis eller skjul\nHøjreklik: stor eller lille visning\nTræk: flyt knappen", mmOn = "Minimap-knappen vises.", mmOff = "Minimap-knappen er skjult. /leta minimap viser den igen.", locked = "Boksen er låst", unlocked = "Boksen er låst op",
+    hint = "Klik: stor eller lille visning\nHøjreklik: indstillinger\nTræk: flyt", mmTip = "Venstreklik: vis eller skjul\nHøjreklik: indstillinger\nTræk: flyt knappen", settings = "Indstillinger", sSwap = "Skift", sBox = "Boks", optOthers = "Spørg også andre hosts i zonen", optChannel = "Skriv \"inv\" i layer kanalen", optLock = "Lås placering", optMinimap = "Minimap-knap", langName = "Sprog: Dansk", doneBtn = "Færdig", mmOn = "Minimap-knappen vises.", mmOff = "Minimap-knappen er skjult. /leta minimap viser den igen.", locked = "Boksen er låst", unlocked = "Boksen er låst op",
     hostNowOn = "Du inviterer nu LayerETA brugere i din zone, der vil skifte lag.", hostNowOff = "Du hoster ikke længere.",
     chanOn = "Skift skriver også \"inv\" i layer kanalen.", chanOff = "Skift skriver ikke længere i layer kanalen.",
-    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta minimap  ·  /leta leave <sekunder>  ·  /leta debug  ·  /leta da|en",
+    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta config  ·  /leta lock  ·  /leta minimap  ·  /leta leave <sekunder>  ·  /leta debug  ·  /leta da|en",
   },
 }
 local function L(key, ...)
@@ -665,6 +665,7 @@ local function label(parent, font, size, color)
   fs:SetFont(font, size, "")
   fs:SetShadowOffset(0, 0)
   if fs.SetWordWrap then fs:SetWordWrap(false) end
+  if fs.SetMaxLines then fs:SetMaxLines(1) end
   if color then fs:SetTextColor(rgb(color)) end
   return fs
 end
@@ -786,7 +787,8 @@ box:SetScript("OnDragStop", function(self)
 end)
 box:SetScript("OnMouseUp", function(self, which)
   if self.dragging then self.dragging = nil; return end
-  if which == "LeftButton" and cfg then setView(view() == "big" and "small" or "big") end
+  if which == "LeftButton" and cfg then setView(view() == "big" and "small" or "big")
+  elseif which == "RightButton" and cfg and LayerETA_OpenSettings then LayerETA_OpenSettings() end
 end)
 box:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine("LayerETA", 1, 0.82, 0.3)
@@ -946,7 +948,7 @@ end)
 mmb:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
 mmb:SetScript("OnClick", function(_, btn)
   if not cfg then return end
-  if btn == "RightButton" then cfg.hidden = false; setView(view() == "big" and "small" or "big")
+  if btn == "RightButton" then LayerETA_OpenSettings()
   else cfg.hidden = not cfg.hidden; paint() end
 end)
 mmb:SetScript("OnEnter", function(self)
@@ -956,6 +958,83 @@ mmb:SetScript("OnEnter", function(self)
   GameTooltip:Show()
 end)
 mmb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+-- ===================================================================== settings ==
+-- a small settings window in the ETA look (same parts as TrackETA's)
+local SW, SP = 260, 18
+local S = CreateFrame("Frame", "LayerETASettings", UIParent)
+S:SetSize(SW, 260); S:SetPoint("CENTER"); S:SetFrameStrata("HIGH"); S:Hide()
+S:SetMovable(true); S:EnableMouse(true); S:SetClampedToScreen(true); S:RegisterForDrag("LeftButton")
+S:SetScript("OnDragStart", S.StartMoving); S:SetScript("OnDragStop", S.StopMovingOrSizing)
+if S.SetToplevel then S:SetToplevel(true) end
+S:SetFrameLevel(40)
+S:HookScript("OnShow", function(self) self:Raise() end)
+S:HookScript("OnMouseDown", function(self) self:Raise() end)
+tinsert(UISpecialFrames, "LayerETASettings")
+do
+  local function slice(file)
+    local t = S:CreateTexture(nil, "BACKGROUND"); t:SetTexture(IMG .. file); t:SetTexCoord(0, 520 / 1024, 0, 40 / 64)
+    return t
+  end
+  local top, bottom, middle = slice("PanelTop"), slice("PanelBottom"), slice("PanelMid")
+  top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(20)
+  bottom:SetPoint("BOTTOMLEFT"); bottom:SetPoint("BOTTOMRIGHT"); bottom:SetHeight(20)
+  middle:SetPoint("TOPLEFT", top, "BOTTOMLEFT"); middle:SetPoint("BOTTOMRIGHT", bottom, "TOPRIGHT")
+end
+local sTitle = label(S, FONT_BOLD, 15); sTitle:SetPoint("LEFT", S, "TOPLEFT", 14, -20)
+local sLine = S:CreateTexture(nil, "ARTWORK"); sLine:SetSize(22, 2); sLine:SetPoint("TOPLEFT", sTitle, "BOTTOMLEFT", 0, -5); sLine:SetColorTexture(1, 0.8, 0.35, 0.9)
+local sClose = CreateFrame("Button", nil, S); sClose:SetSize(20, 20); sClose:SetPoint("TOPRIGHT", -10, -10)
+local sX = label(sClose, FONT_BOLD, 16, C.soft); sX:SetPoint("CENTER"); sX:SetText("×")
+sClose:SetScript("OnEnter", function() sX:SetTextColor(1, 1, 1) end)
+sClose:SetScript("OnLeave", function() sX:SetTextColor(rgb(C.soft)) end)
+sClose:SetScript("OnClick", function() S:Hide() end)
+local langB = pill(S, 130, 24, 12); langB:SetPoint("BOTTOMLEFT", SP, 16)
+local doneB = pill(S, SW - 2 * SP - 130 - 8, 24, 12); doneB:SetPoint("BOTTOMRIGHT", -SP, 16)
+doneB:SetScript("OnClick", function() S:Hide() end)
+
+local heads, rows = {}, {}
+local function sRow(i)
+  local r = rows[i]
+  if r then return r end
+  r = CreateFrame("Button", nil, S); r:SetHeight(24)
+  r.off = r:CreateTexture(nil, "ARTWORK"); r.off:SetSize(32, 18); r.off:SetPoint("RIGHT"); r.off:SetTexture(IMG .. "ToggleOff"); r.off:SetTexCoord(0, 1, 0, 36 / 64)
+  r.on = r:CreateTexture(nil, "ARTWORK"); r.on:SetAllPoints(r.off); r.on:SetTexture(IMG .. "ToggleOn"); r.on:SetTexCoord(0, 1, 0, 36 / 64)
+  r.tx = label(r, FONT_SEMI, 12, C.light); r.tx:SetPoint("LEFT"); r.tx:SetPoint("RIGHT", r.off, "LEFT", -8, 0); r.tx:SetJustifyH("LEFT")
+  r:SetScript("OnClick", function(self) self.set(not self.get()); S.build(); paint() end)
+  rows[i] = r
+  return r
+end
+function S.build()
+  if not cfg then return end
+  sTitle:SetText(L("settings"))
+  local y, n, h = -44, 0, 0
+  local function section(key)
+    h = h + 1
+    local t = heads[h] or label(S, FONT_BOLD, 11, { 1, 0.82, 0.4 }); heads[h] = t
+    t:ClearAllPoints(); t:SetPoint("TOPLEFT", SP, y); t:SetText(L(key)); y = y - 20
+  end
+  local function add(key, get, set)
+    n = n + 1; local r = sRow(n)
+    r:ClearAllPoints(); r:SetPoint("TOPLEFT", SP, y); r:SetPoint("RIGHT", S, "RIGHT", -SP, 0)
+    r.get, r.set = get, set
+    local on = get() and true or false
+    r.on:SetShown(on); r.off:SetShown(not on); r.tx:SetText(L(key)); r:Show()
+    y = y - 24
+  end
+  section("sSwap")
+  add("hostLabel", hosting, function(v) setHosting(v); say(v and L("hostNowOn") or L("hostNowOff")) end)
+  add("optOthers", function() return cfg.others end, function(v) cfg.others = v end)
+  add("optChannel", function() return cfg.channel end, function(v) cfg.channel = v end)
+  y = y - 8
+  section("sBox")
+  add("optLock", function() return cfg.locked end, function(v) cfg.locked = v end)
+  add("optMinimap", function() return cfg.showMinimap end, function(v) cfg.showMinimap = v; mmb:SetShown(v) end)
+  langB.text:SetText(L("langName")); doneB.text:SetText(L("doneBtn"))
+  S:SetHeight(-y + 14 + 24 + 16)
+end
+S:SetScript("OnShow", function() S.build() end)
+langB:SetScript("OnClick", function() cfg.lang = (cfg.lang == "da") and "en" or "da"; S.build(); paint() end)
+function LayerETA_OpenSettings() if S:IsShown() then S:Hide() else S:Show() end end
 
 -- ===================================================================== events ==
 local events = CreateFrame("Frame")
@@ -1040,6 +1119,7 @@ SlashCmdList.LAYERETA = function(input)
     print("  zone map id: " .. tostring((zoneId())) .. "   swaps this hour: " .. Quota.count() .. "/15")
     print("  hosting: " .. tostring(hosting()) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
     print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(hostsToSkip(), ", "))
+  elseif cmd == "config" or cmd == "settings" then LayerETA_OpenSettings()
   elseif cmd == "help" or cmd == "?" then say(L("help"))
   else cfg.hidden = not cfg.hidden; paint() end
 end
