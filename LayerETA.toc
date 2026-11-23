@@ -1,9 +1,10 @@
 ## Interface: 16001
 ## Title: |cffffffffLayer|r|cffffd24aETA|r
-## Notes: Swaps layer with one click. LayerETA users can host for each other, and it can ask in the layer channel.
-## Notes-daDK: Skifter lag med et klik. LayerETA brugere kan hoste for hinanden, og den kan spørge i layer kanalen.
+## Notes: Swaps layer with one click. Asks hosts in your zone for an invite, and LayerETA users can host for each other.
+## Notes-daDK: Skifter lag med et klik. Beder hosts i din zone om en invite, og LayerETA brugere kan hoste for hinanden.
 ## Author: Rasmus
 ## Version: 4.0.0
 ## IconTexture: Interface\AddOns\LayerETA\Textures\Logo
 ## SavedVariables: LayerETADB
+LayerSwapAsk.lua
 LayerETA.lua
