@@ -24,9 +24,9 @@ The **Host for others** switch in the box (or `/leta host`) lets you help other 
 
 Players who host get priority: when you host yourself and ask for a swap, LayerETA hosts answer you first, and the last invite a host has left in its 10 minutes is kept for fellow hosts.
 
-## Spread over many hosts
+## 15 swaps an hour, never the same host twice
 
-There is no swap limit in LayerETA. To spread swaps over many hosts, LayerETA skips a host that invited you for 20 minutes, and a host that turned out to stand on your layer for 15 minutes. The box shows how many times you moved in the last hour.
+LayerETA allows 15 swaps in a rolling hour per character (also across a login). When they are used, the button shows *Wait* with the time left. A host that invited you is not used again for an hour, so your swaps spread over many hosts. A host that turned out to stand on your layer is skipped for 15 minutes.
 
 ## Commands
 

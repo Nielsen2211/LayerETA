@@ -30,7 +30,7 @@ local paint -- redraws the box, set further down
 local TEXT = {
   en = {
     title = "LayerETA", swap = "Swap", stop = "Stop",
-    quota = "%d swaps in the last hour",
+    quota = "%d/15 swaps this hour", spent = "15 swaps this hour. Next one in %s.", waitBtn = "Wait %s",
     hostLabel = "Host for others", hosting = "Hosting", hostCount = "Hosting · %d invited",
     looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
     acceptIt = "Accept the invite from %s", inGroupWait = "In %s's group, waiting for the move",
@@ -48,7 +48,7 @@ local TEXT = {
   },
   da = {
     title = "LayerETA", swap = "Skift", stop = "Stop",
-    quota = "%d skift den seneste time",
+    quota = "%d/15 skift denne time", spent = "15 skift denne time. Næste om %s.", waitBtn = "Vent %s",
     hostLabel = "Host for andre", hosting = "Hoster", hostCount = "Hoster · %d inviteret",
     looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
     acceptIt = "Acceptér invitationen fra %s", inGroupWait = "I %s's gruppe, venter på skiftet",
@@ -137,9 +137,9 @@ local function setHosting(on)
 end
 
 -- ================================================================== ten moves an hour ==
--- How many times this character moved in the last hour, for the player to see. It never blocks a
--- swap. Each move is stored with its time, per character, so the count survives a reload.
-local Quota = { WINDOW = 3600 }
+-- At most 15 swaps in a rolling hour per character. Each move is stored with its time, so the
+-- count survives a reload and a login.
+local Quota = { LIMIT = 15, WINDOW = 3600 }
 function Quota.list()
   cfg.moveLog = cfg.moveLog or {}
   local who = myName() or "?"
@@ -151,6 +151,13 @@ function Quota.list()
   return fresh
 end
 function Quota.count() return #Quota.list() end
+function Quota.full() return Quota.count() >= Quota.LIMIT end
+function Quota.untilNext()
+  local log = Quota.list()
+  if #log < Quota.LIMIT then return "0:00" end
+  local secs = math.max(0, Quota.WINDOW - (time() - log[#log - Quota.LIMIT + 1]))
+  return string.format("%d:%02d", math.floor(secs / 60), secs % 60)
+end
 function Quota.add()
   local log = Quota.list()
   log[#log + 1] = time()
@@ -207,29 +214,34 @@ function Net.split(line)
 end
 
 -- ===================================================================== asking ==
-local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 1200, SKIP_MAX = 12 }
+local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 3600, SKIP_CHARS = 200 }
 local job          -- the swap in progress, or nil
 local lastPress = -100
 local fightEndedAt = -100
 local hostsOnline, hostsSeenAt = {}, 0
 
--- Hosts we skip for a while, so swaps spread over many hosts instead of bouncing between the same
--- few: a host that invited us (20 minutes) and a host that turned out to stand on our layer
--- (15 minutes). Newest first, at most SKIP_MAX names, so the request stays short.
+-- Hosts we skip, so swaps spread over many hosts: a host that invited us is not used again for an
+-- hour, and a host that turned out to stand on our layer is skipped for 15 minutes. Hosts that
+-- invited us come first in the list; the list stays under SKIP_CHARS so the request fits.
 local function hostsToSkip()
   local now, list = time(), {}
   local function collect(book, keep)
     if type(book) ~= "table" then return end
     for who, at in pairs(book) do
-      if type(at) ~= "number" or now - at > keep then book[who] = nil else list[#list + 1] = { who = who, at = at } end
+      if type(at) ~= "number" or now - at > keep then book[who] = nil else list[#list + 1] = { who = who, at = at, used = book == cfg.usedHosts } end
     end
   end
-  collect(cfg.sameAs, Ask.SAME_FOR)
   collect(cfg.usedHosts, Ask.USED_FOR)
-  table.sort(list, function(a, b) return a.at > b.at end)
-  local names, seen = {}, {}
+  collect(cfg.sameAs, Ask.SAME_FOR)
+  table.sort(list, function(a, b)
+    if (a.used or false) ~= (b.used or false) then return a.used == true end
+    return a.at > b.at
+  end)
+  local names, seen, length = {}, {}, 0
   for _, e in ipairs(list) do
-    if not seen[e.who] and #names < Ask.SKIP_MAX then seen[e.who] = true; names[#names + 1] = e.who end
+    if not seen[e.who] and length + #e.who + 1 <= Ask.SKIP_CHARS then
+      seen[e.who] = true; names[#names + 1] = e.who; length = length + #e.who + 1
+    end
   end
   return names
 end
@@ -268,6 +280,7 @@ local function startSwap()
   if inInstance() then note(L("notHere"), 8); return end
   if inGroup() then note(L("grouped"), 8); return end
   if inCombat() or now - fightEndedAt < 6 then note(L("fighting"), 6); return end
+  if Quota.full() then note(L("spent", Quota.untilNext()), 8); return end
 
   local useNet = Net.ready()
   local chan = cfg.channel and layerChannel() or nil
@@ -308,6 +321,9 @@ end
 local function onInvite(from)
   local j = job
   if not j or j.host or GetTime() - j.startedAt > Ask.WINDOW then return end  -- only invites we asked for
+  -- a host that moved us within the hour is not used again: let its invite lapse and wait for another
+  local used = cfg.usedHosts and bare(from) and cfg.usedHosts[bare(from)]
+  if type(used) == "number" and time() - used < Ask.USED_FOR then return end
   j.host = text(from) and from or "?"
   if bare(from) then cfg.usedHosts = cfg.usedHosts or {}; cfg.usedHosts[bare(from)] = time() end
   Net.post("took", j.ticket)
@@ -612,7 +628,8 @@ paint = function()
       y = y + 12 + 4
     end
     local busy = job ~= nil and not job.inGroupAt
-    caption:SetText(busy and L("stop") or L("swap"))
+    local spent = not job and Quota.full()
+    caption:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swap"))
     button:SetWidth(math.max(90, (caption:GetStringWidth() or 40) + 26))
     if button.busy ~= busy then button.busy = busy; tint() end
     height = y + 22 + 10
@@ -695,7 +712,7 @@ SlashCmdList.LAYERETA = function(input)
   elseif cmd == "debug" then
     say("debug")
     print("  LayerETA channel: " .. tostring((Net.channelId())) .. "   layer channel: " .. tostring((layerChannel())))
-    print("  zone map id: " .. tostring((zoneId())) .. "   swaps in the last hour: " .. Quota.count())
+    print("  zone map id: " .. tostring((zoneId())) .. "   swaps this hour: " .. Quota.count() .. "/15")
     print("  hosting: " .. tostring(hosting()) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
     print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(hostsToSkip(), ", "))
   elseif cmd == "help" or cmd == "?" then say(L("help"))
