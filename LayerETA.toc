@@ -7,5 +7,4 @@
 ## Version: 4.0.0
 ## IconTexture: Interface\AddOns\LayerETA\Textures\Logo
 ## SavedVariables: LayerETADB
-HostAsk.lua
 LayerETA.lua

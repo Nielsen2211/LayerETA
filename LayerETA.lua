@@ -8,15 +8,14 @@
 --   * LayerETA users help each other: anyone can turn on "Host for others". Hosts sit in a hidden
 --     LayerETA channel. A click on Swap sends one short request there, and a host in your zone
 --     invites you. Requests and answers use LayerETA's own message format (see Net below).
---   * The click also asks other hosts in the zone for an invite (HostAsk.lua, our own code that only
---     sends a request line). /leta others turns that off.
+--   * The click also asks other hosts in the zone for an invite (see "other hosts in the zone"
+--     below; it only sends a request line). /leta others turns that off.
 --   * Optionally the click also writes "inv" in the public layer channel, if you have joined it,
 --     so any player hosting there can invite you too.
 --   * Since 20 Nov 2026 Forever hides which layer anyone is on, so no host knows if it stands on
 --     your layer. LayerETA finds out after the join from how the game marks the host in your group,
 --     and remembers hosts that turned out to share your layer, so they are skipped next time.
 
-local _, ns = ...
 local NAME = "LayerETA"
 local DIR = "Interface\\AddOns\\LayerETA\\"
 local IMG = DIR .. "Textures\\"
@@ -274,6 +273,99 @@ local function countHosts()
   return n
 end
 
+-- ------------------------------------------------------------------ other hosts in the zone --
+-- Part of asking: when no LayerETA host has invited within a few seconds, LayerETA also asks the
+-- other players in your zone. A /who search finds them, and each gets one hidden addon whisper in
+-- the request format other layer hosts answer. A host who hears it may invite you; the invite is
+-- handled like any other below. The game's own who list would pop open when the answer arrives, so
+-- its frames stop listening to WHO_LIST_UPDATE while our search runs and listen again right after.
+local Others = {}
+local OTHERS_PREFIX = "LayerSwap"   -- the addon message prefix those hosts listen on
+local OTHERS_PER_SECOND = 5   -- whispers per second, so the client never throttles us
+local OTHERS_MAX_NAMES = 40
+local LIST_FRAMES = { "FriendsFrame", "WhoFrame", "LFGWhoListFrame" }
+
+local othersRun        -- the search in progress: { line, zone, names, sent, stillWanted }
+local quieted = {}
+
+local function plain(v) return not hidden(v) end
+
+function Others.available()
+  return C_FriendList and type(C_FriendList.SendWho) == "function" and type(C_FriendList.GetWhoInfo) == "function"
+    and C_ChatInfo and type(C_ChatInfo.SendAddonMessage) == "function"
+end
+
+local function quiet()
+  for _, name in ipairs(LIST_FRAMES) do
+    local frame = _G[name]
+    if type(frame) == "table" and frame.IsEventRegistered and not quieted[name] then
+      local okShown, shown = pcall(frame.IsShown, frame)
+      local okReg, reg = pcall(frame.IsEventRegistered, frame, "WHO_LIST_UPDATE")
+      if okShown and shown ~= true and okReg and reg == true then
+        pcall(frame.UnregisterEvent, frame, "WHO_LIST_UPDATE")
+        quieted[name] = frame
+      end
+    end
+  end
+end
+
+local function loud()
+  for name, frame in pairs(quieted) do
+    pcall(frame.RegisterEvent, frame, "WHO_LIST_UPDATE")
+    quieted[name] = nil
+  end
+end
+
+local function whisperNext(r)
+  if othersRun ~= r then return end
+  if not r.stillWanted() then othersRun = nil; return end
+  local n = 0
+  while n < OTHERS_PER_SECOND and #r.names > 0 do
+    local target = table.remove(r.names, 1)
+    local ok = pcall(C_ChatInfo.SendAddonMessage, OTHERS_PREFIX, r.line, "WHISPER", target)
+    if ok then r.sent = r.sent + 1 end
+    n = n + 1
+  end
+  if #r.names > 0 then C_Timer.After(1, function() whisperNext(r) end) else othersRun = nil end
+end
+
+-- start one ask. stillWanted() returns false once the swap is over or an invite came in.
+function Others.start(zoneMapId, zoneName, x, y, stillWanted, skip)
+  if not Others.available() or not zoneMapId then return false end
+  local line = "inv layer <LS " .. zoneMapId .. " r2"
+  if x and y then line = line .. string.format(" %.1f,%.1f", x * 100, y * 100) end
+  line = line .. ">"
+  othersRun = { line = line, zone = zoneName, names = nil, sent = 0, stillWanted = stillWanted or function() return true end, skip = skip or {} }
+  local r = othersRun
+  quiet()
+  local filter = zoneName and ('z-"' .. zoneName .. '"') or ""
+  local ok = pcall(C_FriendList.SendWho, filter)
+  if not ok then othersRun = nil; loud(); return false end
+  C_Timer.After(10, function() if othersRun == r and not r.names then othersRun = nil end; loud() end)
+  return true
+end
+
+-- WHO_LIST_UPDATE: collect the names and start whispering
+function Others.onWhoList(myName)
+  local r = othersRun
+  loud()
+  if not r or r.names then return end
+  r.names = {}
+  local okN, count = pcall(C_FriendList.GetNumWhoResults)
+  if not okN or not plain(count) or type(count) ~= "number" then count = 0 end
+  for i = 1, math.min(count, OTHERS_MAX_NAMES) do
+    local ok, who = pcall(C_FriendList.GetWhoInfo, i)
+    local name = ok and type(who) == "table" and plain(who.fullName) and who.fullName or nil
+    local short = type(name) == "string" and name:match("^([^%-]+)") or name
+    if type(name) == "string" and name ~= "" and name ~= myName and short ~= myName and not r.skip[short] and not r.skip[name] then
+      r.names[#r.names + 1] = name
+    end
+  end
+  whisperNext(r)
+end
+
+function Others.sentCount() return othersRun and othersRun.sent or 0 end
+
 local function startSwap()
   local now = GetTime()
   if job then finish(L("stopped"), 5); return end
@@ -285,7 +377,7 @@ local function startSwap()
 
   local useNet = Net.ready()
   local chan = cfg.channel and layerChannel() or nil
-  local ext = ns.HostAsk
+  local ext = Others
   local useExt = cfg.others and ext and ext.available() and zoneId() ~= nil
   if not useNet and not chan and not useExt then note(L("noRoute"), 12); return end
   lastPress = now
@@ -652,7 +744,7 @@ local function jobText()
   end
   if j.inGroupAt then return L("inGroupWait", bare(j.host) or "?") end
   if j.host then return j.manual and L("acceptIt", bare(j.host) or "?") or L("invitedBy", bare(j.host) or "?") end
-  local asked = ns.HostAsk and ns.HostAsk.sentCount() or 0
+  local asked = Others.sentCount()
   if asked > 0 then return L("othersAsked", asked) end
   local n = countHosts()
   return n > 0 and L("lookingN", n) or L("looking")
@@ -799,7 +891,7 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   elseif ev == "SHARD_TRANSFER" then
     onMoved()
   elseif ev == "WHO_LIST_UPDATE" then
-    if ns.HostAsk then ns.HostAsk.onWhoList(myName()) end
+    Others.onWhoList(myName())
   end
 end)
 
