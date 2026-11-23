@@ -15,7 +15,7 @@ local _, ns = ...
 local Ask = {}
 ns.HostAsk = Ask
 
-local PREFIX = "Layer" .. "Swap"   -- the addon message prefix those hosts listen on
+local PREFIX = "LayerSwap"   -- the addon message prefix those hosts listen on
 local PER_SECOND = 5   -- whispers per second, so the client never throttles us
 local MAX_NAMES = 40
 local LIST_FRAMES = { "FriendsFrame", "WhoFrame", "LFGWhoListFrame" }
