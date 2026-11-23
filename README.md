@@ -11,7 +11,7 @@ Part of the ETA family with [LevelETA](https://github.com/Nielsen2211/LevelETA) 
 In WoW you change layer by joining a group whose leader stands on another layer in the same zone. The game then moves you, and you can leave again.
 
 1. Click the box to fold it out, then click **Swap**.
-2. LayerETA sends a short request in its own hidden channel. Players who run LayerETA with **Host for others** on, and stand in your zone, can invite you. It also looks up the players in your zone with /who and asks them for an invite in a hidden whisper, so players who host with other layer addons can invite you. If you have joined the public layer channel (`/join layer`), the click also writes `inv` there, so anyone hosting in that channel can invite you too.
+2. LayerETA sends a short request in its own hidden channel. Players who run LayerETA with **Host for others** on, and stand in your zone, can invite you. If no LayerETA host has invited you within 3 seconds, it also looks up the players in your zone with /who and asks them for an invite in a hidden whisper, so players who host with other layer addons can invite you. If you have joined the public layer channel (`/join layer`), the click also writes `inv` there, so anyone hosting in that channel can invite you too.
 3. LayerETA accepts the first invite and tells the other hosts it is taken.
 4. **Moved?** The game tells addons when it moves you. LayerETA counts the swap and leaves the group a few seconds later.
 5. **Not moved?** After 3 seconds LayerETA looks at how the game marks the host in your group. No mark means the host stands on your layer: LayerETA leaves and skips that host for 15 minutes. Marked as on another layer means the game refused to move you, usually because your 10 swaps this hour are used.
@@ -20,7 +20,9 @@ Since 20 November 2026 WoW Forever hides which layer anyone is on, so no addon c
 
 ## Hosting
 
-Turn on the **Host for others** switch in the box (or `/leta host`) to help other LayerETA users. You only host while you are alone, out of combat and outside instances, at most 5 invites in 10 minutes. A guest who stays more than 40 seconds is left behind when you leave the little group. Hosting is off by default.
+The **Host for others** switch in the box (or `/leta host`) lets you help other LayerETA users. You only host while you are alone, out of combat and outside instances, at most 5 invites in 10 minutes. A guest who stays more than 40 seconds is left behind when you leave the little group. Hosting is on by default, and one click on the switch turns it off. Off stays off for that character, across reloads, logins and updates, until you turn it on again. While you host, a player you invite is in your group for a few seconds: XP and loot from a kill in those seconds are shared as in any group. You never host while you are in a group of your own.
+
+Players who host get priority: when you host yourself and ask for a swap, LayerETA hosts answer you first, and the last invite a host has left in its 10 minutes is kept for fellow hosts.
 
 ## 10 swaps an hour
 

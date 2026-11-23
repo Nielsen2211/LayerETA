@@ -73,7 +73,7 @@ local function L(key, ...)
 end
 local function say(msg) print("|cffffd24aLayerETA|r: " .. msg) end
 
-local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, host = false, channel = true, layerswap = true }
+local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, channel = true, layerswap = true }
 
 -- ================================================================================== helpers ==
 -- Forever hands some values to addons as "secret": we never read those.
@@ -125,6 +125,17 @@ local function spot(id)
   if type(x) == "number" and type(y) == "number" and x > 0 and y > 0 then return x, y end
 end
 
+-- Hosting is on unless this character turned it off. The choice is stored per character and stays
+-- until the player turns it on again: a reload, a login or a new version never changes it.
+local function hosting()
+  local offFor = cfg and cfg.hostOffFor
+  return not (type(offFor) == "table" and offFor[myName() or "?"])
+end
+local function setHosting(on)
+  cfg.hostOffFor = type(cfg.hostOffFor) == "table" and cfg.hostOffFor or {}
+  cfg.hostOffFor[myName() or "?"] = (not on) or nil
+end
+
 -- ================================================================== ten moves an hour ==
 -- Forever moves a character to another layer at most ten times in an hour. Each move is stored
 -- with its time, per character, so the count survives a reload.
@@ -155,10 +166,12 @@ end
 
 -- ======================================================================= network ==
 -- LayerETA's own channel and message format. Every message is one line:
---   "1;ask;<ticket>;<zone>;<name,name,...>"  a player wants another layer. The names are hosts
---                                             that recently turned out to share its layer.
+--   "1;ask;<ticket>;<zone>;<name,name,...>;<h>"  a player wants another layer. The names are hosts
+--                                             that recently turned out to share its layer. "h" when
+--                                             the asker hosts too: hosts serve those first.
 --   "1;took;<ticket>"                         the asker accepted an invite, other hosts stand down.
---   "1;here"                                  a host says it is online (answer to "1;who").
+--   "1;here"                                  a host says it is online (answer to "1;who", and every
+--                                             5 minutes while hosting).
 --   "1;who"                                   who hosts right now? (sent with an ask, answered by hosts)
 -- The channel has a password, so only LayerETA joins it and nobody can type in it by accident.
 local Net = { TAG = "LETA", CHANNEL = "LayerETAnet", KEY = "eta7layer", VERSION = "1" }
@@ -202,7 +215,7 @@ function Net.split(line)
 end
 
 -- ===================================================================== asking ==
-local Ask = { WINDOW = 45, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900 }
+local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900 }
 local job          -- the swap in progress, or nil
 local lastPress = -100
 local fightEndedAt = -100
@@ -264,17 +277,23 @@ local function startSwap()
   local ticket = string.format("%05d%04d", time() % 100000, math.random(0, 9999))
   if useNet then
     Net.post("who")
-    Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(sameLayerHosts(), ","))
+    Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(sameLayerHosts(), ","), hosting() and "h" or "-")
   end
   -- a button click counts as a key press, so the game lets us say "inv" in a channel here
   if chan and type(SendChatMessage) == "function" then pcall(SendChatMessage, "inv", "CHANNEL", nil, chan) end
 
   local mine = { ticket = ticket, startedAt = now }
   job = mine
+  -- LayerETA hosts always come first. Other hosts in the zone are only asked when no LayerETA host
+  -- has invited within a few seconds (or at once, when our own channel is not ready).
   if useLS then
-    local zone = zoneId()
-    local x, y = spot(zone)
-    LS.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end)
+    local function askOthers()
+      if job ~= mine or mine.host then return end
+      local zone = zoneId()
+      local x, y = spot(zone)
+      LS.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end)
+    end
+    if useNet then C_Timer.After(Ask.OWN_FIRST, askOthers) else askOthers() end
   end
   paint()
   C_Timer.After(Ask.WINDOW, function()
@@ -350,7 +369,7 @@ end
 
 -- ===================================================================== hosting ==
 -- With "Host for others" on, LayerETA invites askers in your zone. Only while you are alone, out of
--- combat and out of instances, at most HOST_MAX invites per HOST_WINDOW, and never twice per ticket.
+-- combat and out of instances (on by default, one click on the switch turns it off), at most HOST_MAX invites per HOST_WINDOW, and never twice per ticket.
 local Host = { MAX = 5, WINDOW = 600, STAY = 40 }
 local tickets = {}       -- [ticket] = "seen" or "took"
 local guestAt            -- when our last guest was invited
@@ -364,18 +383,29 @@ function Host.recent()
 end
 
 function Host.able()
-  return cfg.host and not inGroup() and not inInstance() and not inCombat() and #Host.recent() < Host.MAX
+  return hosting() and not inGroup() and not inInstance() and not inCombat() and #Host.recent() < Host.MAX
 end
 
-function Host.onAsk(sender, ticket, zone, skip)
+-- Askers who host for others come first. Their "h" only counts when we have heard them say "here"
+-- in the last 10 minutes, so the flag alone is not enough. The last invite in our budget is kept
+-- for such askers, and they get a shorter wait than everyone else.
+function Host.isFellowHost(sender, flag)
+  local seen = hostsOnline[sender]
+  return flag == "h" and seen ~= nil and GetTime() - seen < 600
+end
+
+function Host.onAsk(sender, ticket, zone, skip, flag)
   if not Host.able() or tickets[ticket] then return end
+  local fellow = Host.isFellowHost(sender, flag)
+  if not fellow and #Host.recent() >= Host.MAX - 1 then return end
   tickets[ticket] = "seen"
   if tostring(zoneId() or -1) ~= zone then return end
   local me = myName()
   for who in string.gmatch(skip or "", "[^,]+") do if who == me then return end end
   -- several hosts may hear the same ask: each waits a short random moment, the first one invites
   -- and the asker's "took" makes the rest stand down
-  C_Timer.After(0.3 + math.random() * 1.7, function()
+  local wait = fellow and (0.2 + math.random() * 0.6) or (1.2 + math.random() * 1.8)
+  C_Timer.After(wait, function()
     if tickets[ticket] == "took" or not Host.able() then return end
     local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
     if call(invite, sender) then
@@ -405,11 +435,11 @@ end
 function Host.onMessage(parts, sender)
   local kind = parts[2]
   if kind == "ask" and parts[3] and parts[4] then
-    Host.onAsk(sender, parts[3], parts[4], parts[5])
+    Host.onAsk(sender, parts[3], parts[4], parts[5], parts[6])
   elseif kind == "took" and parts[3] then
     tickets[parts[3]] = "took"
   elseif kind == "who" then
-    if cfg.host and GetTime() - hostsSeenAt > 5 then hostsSeenAt = GetTime(); Net.post("here") end
+    if hosting() and GetTime() - hostsSeenAt > 5 then hostsSeenAt = GetTime(); Net.post("here") end
   elseif kind == "here" then
     hostsOnline[sender] = GetTime()
     if job and paint then paint() end
@@ -471,7 +501,7 @@ local knob = hostLine:CreateTexture(nil, "ARTWORK", nil, 2)
 knob:SetSize(8, 8); knob:SetTexture(IMG .. "SwitchKnob")
 local hostNote = label(box, FONT_SEMI, 9, 0.62, 0.82, 1)
 local function drawSwitch()
-  local on, hot = cfg and cfg.host, hostLine.hot
+  local on, hot = cfg and hosting(), hostLine.hot
   knob:ClearAllPoints()
   if on then
     trackEdge:SetVertexColor(0.85, 0.66, 0.24); trackFill:SetVertexColor(hot and 0.92 or 0.85, hot and 0.72 or 0.66, hot and 0.3 or 0.24)
@@ -484,8 +514,8 @@ local function drawSwitch()
   end
 end
 hostLine:SetScript("OnClick", function()
-  cfg.host = not cfg.host
-  say(cfg.host and L("hostNowOn") or L("hostNowOff"))
+  setHosting(not hosting())
+  say(hosting() and L("hostNowOn") or L("hostNowOff"))
   paint()
 end)
 hostLine:SetScript("OnEnter", function() hostLine.hot = true; drawSwitch() end)
@@ -558,7 +588,7 @@ paint = function()
   local quota = L("quota", Quota.left())
   local open = cfg.open and true or false
   rule:SetShown(open); info:SetShown(open); hostLine:SetShown(open); button:SetShown(open)
-  hostNote:SetShown(open and cfg.host and true or false)
+  hostNote:SetShown(open and hosting())
   local height = 40
   if open then
     sub:SetText(quota)
@@ -571,7 +601,7 @@ paint = function()
     hostText:SetText(L("hostLabel"))
     drawSwitch()
     y = y + 14 + 6
-    if cfg.host then
+    if hosting() then
       hostNote:ClearAllPoints(); hostNote:SetPoint("TOPLEFT", 14, -(y - 4))
       hostNote:SetText(hosted > 0 and L("hostCount", hosted) or L("hosting"))
       y = y + 12 + 4
@@ -602,7 +632,7 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
     cfg = LayerETADB
     for k, v in pairs(DEFAULTS) do if cfg[k] == nil then cfg[k] = v end end
     -- data from LayerETA 3.x that this version no longer uses
-    cfg.letters, cfg.hist, cfg.book, cfg.asked, cfg.moves = nil, nil, nil, nil, nil
+    cfg.letters, cfg.hist, cfg.book, cfg.asked, cfg.moves, cfg.host = nil, nil, nil, nil, nil, nil
     cfg._note, cfg._noteUntil = nil, nil
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, Net.TAG) end
     if cfg.point then box:ClearAllPoints(); box:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cfg.point[1], cfg.point[2]) end
@@ -634,9 +664,12 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   end
 end)
 
+local lastHere = -1000
 C_Timer.NewTicker(1, function()
   if not cfg then return end
   local now = GetTime()
+  -- while hosting, say "here" now and then, so other hosts know this player hosts too
+  if hosting() and Net.channelId() and now - lastHere > 300 then lastHere = now; Net.post("here") end
   stepJob(now)
   Host.step(now)
   if job or (cfg._noteUntil and now < cfg._noteUntil + 1) or Quota.left() < Quota.LIMIT then paint() end
@@ -649,7 +682,7 @@ SlashCmdList.LAYERETA = function(input)
   if not cfg then return end
   local cmd, arg = string.match(string.lower(input or ""), "^%s*(%S*)%s*(.-)%s*$")
   if cmd == "swap" then startSwap()
-  elseif cmd == "host" then cfg.host = not cfg.host; say(cfg.host and L("hostNowOn") or L("hostNowOff")); paint()
+  elseif cmd == "host" then setHosting(not hosting()); say(hosting() and L("hostNowOn") or L("hostNowOff")); paint()
   elseif cmd == "channel" then cfg.channel = not cfg.channel; say(cfg.channel and L("chanOn") or L("chanOff"))
   elseif cmd == "others" then cfg.layerswap = not cfg.layerswap; say(cfg.layerswap and L("lsOn") or L("lsOff"))
   elseif cmd == "lock" then cfg.locked = not cfg.locked; say(cfg.locked and L("locked") or L("unlocked"))
@@ -659,7 +692,7 @@ SlashCmdList.LAYERETA = function(input)
     say("debug")
     print("  LayerETA channel: " .. tostring((Net.channelId())) .. "   layer channel: " .. tostring((layerChannel())))
     print("  zone map id: " .. tostring((zoneId())) .. "   swaps left: " .. Quota.left())
-    print("  hosting: " .. tostring(cfg.host) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
+    print("  hosting: " .. tostring(hosting()) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
     print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(sameLayerHosts(), ", "))
   elseif cmd == "help" or cmd == "?" then say(L("help"))
   else cfg.hidden = not cfg.hidden; paint() end
