@@ -1,13 +1,11 @@
--- LayerETA: ask LayerSwap hosts for an invite.
+-- LayerETA: ask hosts outside LayerETA for an invite.
 -- Copyright (c) 2026 Rasmus. All Rights Reserved.
 --
--- This file is the only part of LayerETA that talks to another addon. It does one thing: it asks
--- players who host with LayerSwap for a group invite, in the short request line their hosts answer.
--- It does not host, read layers, or use any other part of LayerSwap. All code here is our own.
+-- This file asks players in your zone who host with another layer addon for a group invite. It
+-- only sends a short request line; it does not host or read layers. All code here is our own.
 --
 --   1. a /who search for the players in your zone
---   2. one hidden addon whisper to each of them, prefix "LayerSwap", text:
---        inv layer <LS <zone map id> r2 <x>,<y>>
+--   2. one hidden addon whisper to each of them, in the request format those hosts answer
 --   3. a host who hears it may invite you; LayerETA itself handles the invite (LayerETA.lua)
 --
 -- The game's own who list would pop open when the answer arrives, so the list frames stop listening
@@ -15,9 +13,9 @@
 
 local _, ns = ...
 local Ask = {}
-ns.LayerSwapAsk = Ask
+ns.HostAsk = Ask
 
-local PREFIX = "LayerSwap"
+local PREFIX = "LayerSwap"   -- the addon message prefix those hosts listen on
 local PER_SECOND = 5   -- whispers per second, so the client never throttles us
 local MAX_NAMES = 40
 local LIST_FRAMES = { "FriendsFrame", "WhoFrame", "LFGWhoListFrame" }
