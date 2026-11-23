@@ -81,7 +81,21 @@ local function text(v) return not hidden(v) and type(v) == "string" and v ~= "" 
 local function bare(name) return text(name) and (name:match("^([^%-]+)") or name) or nil end
 local function call(fn, ...) if type(fn) ~= "function" then return false end return pcall(fn, ...) end
 
-local function myName() local ok, n = call(UnitName, "player"); return ok and text(n) and n or nil end
+local knownName   -- our own name, kept from the first time the game hands it over readable
+local function myName()
+  local ok, n = call(UnitName, "player")
+  if ok and text(n) then knownName = n end
+  return knownName
+end
+-- is this name (with or without a realm) our own character? Never invite or whisper ourselves.
+local function isMe(name)
+  if not text(name) then return false end
+  local me = myName()
+  local short = (name:match("^([^%-]+)") or name):lower()
+  if me and short == me:lower() then return true end
+  local ok, same = call(UnitIsUnit, name, "player")
+  return ok and not hidden(same) and same == true
+end
 local function inInstance() local ok, yes = call(IsInInstance); return ok and yes == true end
 local function inGroup() local ok, yes = call(IsInGroup); return ok and yes == true end
 local function inCombat() local ok, yes = call(InCombatLockdown); return ok and yes == true end
@@ -215,6 +229,7 @@ end
 -- ===================================================================== asking ==
 local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 3600, SKIP_CHARS = 200 }
 local job          -- the swap in progress, or nil
+local ownTickets = {}  -- tickets of our own asks: a host never answers its own ask
 local Hush         -- keeps group lines out of the chat during a swap (see "silence")
 local lastDoneAt   -- GetTime() when the last swap ended with a move
 local lastPress = -100
@@ -367,7 +382,7 @@ function Others.onWhoList(myName)
     local ok, who = pcall(C_FriendList.GetWhoInfo, i)
     local name = ok and type(who) == "table" and plain(who.fullName) and who.fullName or nil
     local short = type(name) == "string" and name:match("^([^%-]+)") or name
-    if type(name) == "string" and name ~= "" and name ~= myName and short ~= myName and not r.skip[short] and not r.skip[name] then
+    if type(name) == "string" and name ~= "" and not isMe(name) and not r.skip[short] and not r.skip[name] then
       r.names[#r.names + 1] = name
     end
   end
@@ -393,6 +408,7 @@ local function startSwap()
   lastPress = now
 
   local ticket = string.format("%05d%04d", time() % 100000, math.random(0, 9999))
+  ownTickets[ticket] = true
   if useNet then
     Net.post("who")
     Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(hostsToSkip(), ","), hosting() and "h" or "-")
@@ -524,13 +540,13 @@ function Host.onAsk(sender, ticket, zone, skip, flag)
   if not fellow and #Host.recent() >= Host.MAX - 1 then return end
   tickets[ticket] = "seen"
   if tostring(zoneId() or -1) ~= zone then return end
-  local me = myName()
-  for who in string.gmatch(skip or "", "[^,]+") do if who == me then return end end
+  if isMe(sender) or ownTickets[ticket] then return end
+  for who in string.gmatch(skip or "", "[^,]+") do if isMe(who) then return end end
   -- several hosts may hear the same ask: each waits a short random moment, the first one invites
   -- and the asker's "took" makes the rest stand down
   local wait = fellow and (0.2 + math.random() * 0.6) or (1.2 + math.random() * 1.8)
   C_Timer.After(wait, function()
-    if tickets[ticket] == "took" or not Host.able() then return end
+    if tickets[ticket] == "took" or not Host.able() or isMe(sender) then return end
     local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
     if call(invite, sender) then
       tickets[ticket] = "took"
@@ -577,7 +593,7 @@ end
 -- of the chat windows. Our own channel's join and leave notices are always kept out.
 Hush = { until_ = 0, patterns = nil }
 local GROUP_LINES = {
-  "ERR_JOINED_GROUP_S", "ERR_LEFT_GROUP_S", "ERR_LEFT_GROUP_YOU", "ERR_GROUP_DISBANDED", "ERR_INVITE_PLAYER_S",
+  "ERR_INVITE_SELF", "ERR_JOINED_GROUP_S", "ERR_LEFT_GROUP_S", "ERR_LEFT_GROUP_YOU", "ERR_GROUP_DISBANDED", "ERR_INVITE_PLAYER_S",
   "ERR_DECLINE_GROUP_S", "ERR_NEW_LEADER_S", "ERR_NEW_LEADER_YOU", "ERR_UNINVITE_YOU", "ERR_GROUP_JOINED",
   "ERR_RAID_YOU_JOINED", "ERR_SET_LOOT_FREEFORALL", "ERR_SET_LOOT_GROUP", "ERR_SET_LOOT_NBG", "ERR_SET_LOOT_ROUNDROBIN",
   "ERR_SET_LOOT_MASTER", "ERR_SET_LOOT_THRESHOLD_S", "ERR_PARTY_CONVERTED_TO_RAID", "JOINED_PARTY", "LEFT_PARTY",
@@ -601,6 +617,7 @@ end
 function Hush.hold(secs) Hush.until_ = math.max(Hush.until_, GetTime() + secs) end
 function Hush.active() return job ~= nil or GetTime() < Hush.until_ end
 local function systemFilter(_, _, line)
+  if type(ERR_INVITE_SELF) == "string" and line == ERR_INVITE_SELF then return true end
   if not Hush.active() or type(line) ~= "string" or hidden(line) then return false end
   if not Hush.patterns then Hush.build() end
   for _, pat in ipairs(Hush.patterns) do if line:find(pat) then return true end end
@@ -970,7 +987,7 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
     fightEndedAt = GetTime()
   elseif ev == "CHAT_MSG_ADDON" then
     if hidden(a1) or a1 ~= Net.TAG or hidden(a3) or a3 ~= "CHANNEL" or not text(a2) or not text(a4) then return end
-    if a4 == myName() or bare(a4) == myName() then return end
+    if isMe(a4) then return end
     local parts = Net.split(a2)
     if parts[1] ~= Net.VERSION then return end
     Host.onMessage(parts, a4)
