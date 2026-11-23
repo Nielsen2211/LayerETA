@@ -67,12 +67,12 @@ local function whisperNext(r)
 end
 
 -- start one ask. stillWanted() returns false once the swap is over or an invite came in.
-function Ask.start(zoneMapId, zoneName, x, y, stillWanted)
+function Ask.start(zoneMapId, zoneName, x, y, stillWanted, skip)
   if not Ask.available() or not zoneMapId then return false end
   local line = "inv layer <LS " .. zoneMapId .. " r2"
   if x and y then line = line .. string.format(" %.1f,%.1f", x * 100, y * 100) end
   line = line .. ">"
-  run = { line = line, zone = zoneName, names = nil, sent = 0, stillWanted = stillWanted or function() return true end }
+  run = { line = line, zone = zoneName, names = nil, sent = 0, stillWanted = stillWanted or function() return true end, skip = skip or {} }
   local r = run
   quiet()
   local filter = zoneName and ('z-"' .. zoneName .. '"') or ""
@@ -93,7 +93,8 @@ function Ask.onWhoList(myName)
   for i = 1, math.min(count, MAX_NAMES) do
     local ok, who = pcall(C_FriendList.GetWhoInfo, i)
     local name = ok and type(who) == "table" and plain(who.fullName) and who.fullName or nil
-    if type(name) == "string" and name ~= "" and name ~= myName and (name:match("^([^%-]+)") ~= myName) then
+    local short = type(name) == "string" and name:match("^([^%-]+)") or name
+    if type(name) == "string" and name ~= "" and name ~= myName and short ~= myName and not r.skip[short] and not r.skip[name] then
       r.names[#r.names + 1] = name
     end
   end

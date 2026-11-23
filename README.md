@@ -14,7 +14,7 @@ In WoW you change layer by joining a group whose leader stands on another layer 
 2. LayerETA sends a short request in its own hidden channel. Players who run LayerETA with **Host for others** on, and stand in your zone, can invite you. If no LayerETA host has invited you within 3 seconds, it also looks up the players in your zone with /who and asks them for an invite in a hidden whisper, so players who host with other layer addons can invite you. If you have joined the public layer channel (`/join layer`), the click also writes `inv` there, so anyone hosting in that channel can invite you too.
 3. LayerETA accepts the first invite and tells the other hosts it is taken.
 4. **Moved?** The game tells addons when it moves you. LayerETA counts the swap and leaves the group a few seconds later.
-5. **Not moved?** After 3 seconds LayerETA looks at how the game marks the host in your group. No mark means the host stands on your layer: LayerETA leaves and skips that host for 15 minutes. Marked as on another layer means the game refused to move you, usually because your 10 swaps this hour are used.
+5. **Not moved?** After 3 seconds LayerETA looks at how the game marks the host in your group. No mark means the host stands on your layer: LayerETA leaves and skips that host for 15 minutes. Marked as on another layer means the game refused to move you, try again in a little while.
 
 Since 20 November 2026 WoW Forever hides which layer anyone is on, so no addon can show your layer or take you to a chosen one.
 
@@ -24,9 +24,9 @@ The **Host for others** switch in the box (or `/leta host`) lets you help other 
 
 Players who host get priority: when you host yourself and ask for a swap, LayerETA hosts answer you first, and the last invite a host has left in its 10 minutes is kept for fellow hosts.
 
-## 10 swaps an hour
+## Spread over many hosts
 
-The game moves a character at most ten times an hour. LayerETA counts them per character (also across a login), tells you when few are left, and once they are used up the button shows *Wait* with the time left.
+There is no swap limit in LayerETA. To spread swaps over many hosts, LayerETA skips a host that invited you for 20 minutes, and a host that turned out to stand on your layer for 15 minutes. The box shows how many times you moved in the last hour.
 
 ## Commands
 

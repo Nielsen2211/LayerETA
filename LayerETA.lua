@@ -29,16 +29,16 @@ local paint -- redraws the box, set further down
 -- ===================================================================================== text ==
 local TEXT = {
   en = {
-    title = "LayerETA", swap = "Swap", stop = "Stop", waitBtn = "Wait %s",
-    quota = "%d of 10 swaps left this hour", quotaLow = "Only %d swaps left this hour.",
+    title = "LayerETA", swap = "Swap", stop = "Stop",
+    quota = "%d swaps in the last hour",
     hostLabel = "Host for others", hosting = "Hosting", hostCount = "Hosting · %d invited",
     looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
     acceptIt = "Accept the invite from %s", inGroupWait = "In %s's group, waiting for the move",
     moved = "Moved to another layer", leavingIn = "Moved. Leaving the group in %ds",
-    sameLayer = "%s is on your layer. Left the group.", refused = "The game did not move you. Your 10 swaps this hour may be used.",
+    sameLayer = "%s is on your layer. Left the group.", refused = "The game did not move you. Try again in a little while.",
     noHost = "No host answered. Try again in a little while.", stopped = "Stopped",
     notHere = "Swapping works in the open world, not in here.", grouped = "Leave your group first.",
-    fighting = "Not during combat. Try again in a few seconds.", spent = "No swaps left this hour. Wait %s.",
+    fighting = "Not during combat. Try again in a few seconds.",
     noRoute = "No way to ask: the LayerETA channel is not ready and you are not in the layer channel (/join layer).",
     lsOn = "Swap also asks other hosts in your zone for an invite.", lsOff = "Swap no longer asks other hosts in your zone.", lsAsked = "Looking for a host (asked %d players)",
     hint = "Click: open or close  ·  Drag: move", locked = "Box locked", unlocked = "Box unlocked",
@@ -47,16 +47,16 @@ local TEXT = {
     help = "/leta: show or hide  ·  /leta swap  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
   },
   da = {
-    title = "LayerETA", swap = "Skift", stop = "Stop", waitBtn = "Vent %s",
-    quota = "%d af 10 skift tilbage denne time", quotaLow = "Kun %d skift tilbage denne time.",
+    title = "LayerETA", swap = "Skift", stop = "Stop",
+    quota = "%d skift den seneste time",
     hostLabel = "Host for andre", hosting = "Hoster", hostCount = "Hoster · %d inviteret",
     looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
     acceptIt = "Acceptér invitationen fra %s", inGroupWait = "I %s's gruppe, venter på skiftet",
     moved = "Flyttet til et andet lag", leavingIn = "Flyttet. Forlader gruppen om %ds",
-    sameLayer = "%s er på dit lag. Forlod gruppen.", refused = "Spillet flyttede dig ikke. Dine 10 skift denne time kan være brugt.",
+    sameLayer = "%s er på dit lag. Forlod gruppen.", refused = "Spillet flyttede dig ikke. Prøv igen om lidt.",
     noHost = "Ingen host svarede. Prøv igen om lidt.", stopped = "Stoppet",
     notHere = "Skift virker ude i verden, ikke herinde.", grouped = "Forlad din gruppe først.",
-    fighting = "Ikke i kamp. Prøv igen om et par sekunder.", spent = "Ingen skift tilbage denne time. Vent %s.",
+    fighting = "Ikke i kamp. Prøv igen om et par sekunder.",
     noRoute = "Kan ikke spørge: LayerETA kanalen er ikke klar, og du er ikke i layer kanalen (/join layer).",
     lsOn = "Skift spørger også andre hosts i zonen om en invite.", lsOff = "Skift spørger ikke længere andre hosts i zonen.", lsAsked = "Leder efter en host (spurgte %d spillere)",
     hint = "Klik: åbn eller luk  ·  Træk: flyt", locked = "Boksen er låst", unlocked = "Boksen er låst op",
@@ -137,9 +137,9 @@ local function setHosting(on)
 end
 
 -- ================================================================== ten moves an hour ==
--- Forever moves a character to another layer at most ten times in an hour. Each move is stored
--- with its time, per character, so the count survives a reload.
-local Quota = { LIMIT = 10, WINDOW = 3600 }
+-- How many times this character moved in the last hour, for the player to see. It never blocks a
+-- swap. Each move is stored with its time, per character, so the count survives a reload.
+local Quota = { WINDOW = 3600 }
 function Quota.list()
   cfg.moveLog = cfg.moveLog or {}
   local who = myName() or "?"
@@ -150,18 +150,10 @@ function Quota.list()
   cfg.moveLog[who] = fresh
   return fresh
 end
-function Quota.left() return math.max(0, Quota.LIMIT - #Quota.list()) end
-function Quota.untilNext()
-  local log = Quota.list()
-  if #log < Quota.LIMIT then return "0:00" end
-  local secs = math.max(0, Quota.WINDOW - (time() - log[1]))
-  return string.format("%d:%02d", math.floor(secs / 60), secs % 60)
-end
+function Quota.count() return #Quota.list() end
 function Quota.add()
   local log = Quota.list()
   log[#log + 1] = time()
-  local left = Quota.left()
-  if left == 3 or left == 1 then say(L("quotaLow", left)) end
 end
 
 -- ======================================================================= network ==
@@ -215,18 +207,29 @@ function Net.split(line)
 end
 
 -- ===================================================================== asking ==
-local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900 }
+local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 1200, SKIP_MAX = 12 }
 local job          -- the swap in progress, or nil
 local lastPress = -100
 local fightEndedAt = -100
 local hostsOnline, hostsSeenAt = {}, 0
 
--- hosts that turned out to stand on our layer, remembered for a while
-local function sameLayerHosts()
-  cfg.sameAs = cfg.sameAs or {}
-  local now, names = time(), {}
-  for who, at in pairs(cfg.sameAs) do
-    if type(at) ~= "number" or now - at > Ask.SAME_FOR then cfg.sameAs[who] = nil else names[#names + 1] = who end
+-- Hosts we skip for a while, so swaps spread over many hosts instead of bouncing between the same
+-- few: a host that invited us (20 minutes) and a host that turned out to stand on our layer
+-- (15 minutes). Newest first, at most SKIP_MAX names, so the request stays short.
+local function hostsToSkip()
+  local now, list = time(), {}
+  local function collect(book, keep)
+    if type(book) ~= "table" then return end
+    for who, at in pairs(book) do
+      if type(at) ~= "number" or now - at > keep then book[who] = nil else list[#list + 1] = { who = who, at = at } end
+    end
+  end
+  collect(cfg.sameAs, Ask.SAME_FOR)
+  collect(cfg.usedHosts, Ask.USED_FOR)
+  table.sort(list, function(a, b) return a.at > b.at end)
+  local names, seen = {}, {}
+  for _, e in ipairs(list) do
+    if not seen[e.who] and #names < Ask.SKIP_MAX then seen[e.who] = true; names[#names + 1] = e.who end
   end
   return names
 end
@@ -265,7 +268,6 @@ local function startSwap()
   if inInstance() then note(L("notHere"), 8); return end
   if inGroup() then note(L("grouped"), 8); return end
   if inCombat() or now - fightEndedAt < 6 then note(L("fighting"), 6); return end
-  if Quota.left() == 0 then note(L("spent", Quota.untilNext()), 8); return end
 
   local useNet = Net.ready()
   local chan = cfg.channel and layerChannel() or nil
@@ -277,7 +279,7 @@ local function startSwap()
   local ticket = string.format("%05d%04d", time() % 100000, math.random(0, 9999))
   if useNet then
     Net.post("who")
-    Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(sameLayerHosts(), ","), hosting() and "h" or "-")
+    Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(hostsToSkip(), ","), hosting() and "h" or "-")
   end
   -- a button click counts as a key press, so the game lets us say "inv" in a channel here
   if chan and type(SendChatMessage) == "function" then pcall(SendChatMessage, "inv", "CHANNEL", nil, chan) end
@@ -291,7 +293,9 @@ local function startSwap()
       if job ~= mine or mine.host then return end
       local zone = zoneId()
       local x, y = spot(zone)
-      LS.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end)
+      local skip = {}
+      for _, who in ipairs(hostsToSkip()) do skip[who] = true end
+      LS.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end, skip)
     end
     if useNet then C_Timer.After(Ask.OWN_FIRST, askOthers) else askOthers() end
   end
@@ -305,6 +309,7 @@ local function onInvite(from)
   local j = job
   if not j or j.host or GetTime() - j.startedAt > Ask.WINDOW then return end  -- only invites we asked for
   j.host = text(from) and from or "?"
+  if bare(from) then cfg.usedHosts = cfg.usedHosts or {}; cfg.usedHosts[bare(from)] = time() end
   Net.post("took", j.ticket)
   if call(AcceptGroup) then
     call(StaticPopup_Hide, "PARTY_INVITE")
@@ -585,7 +590,7 @@ paint = function()
   if box.scaleNow ~= cfg.scale then box.scaleNow = cfg.scale; box:SetScale(cfg.scale or 1) end
   head:SetText(L("title"))
   local status = jobText()
-  local quota = L("quota", Quota.left())
+  local quota = L("quota", Quota.count())
   local open = cfg.open and true or false
   rule:SetShown(open); info:SetShown(open); hostLine:SetShown(open); button:SetShown(open)
   hostNote:SetShown(open and hosting())
@@ -607,8 +612,7 @@ paint = function()
       y = y + 12 + 4
     end
     local busy = job ~= nil and not job.inGroupAt
-    local spent = not job and Quota.left() == 0
-    caption:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swap"))
+    caption:SetText(busy and L("stop") or L("swap"))
     button:SetWidth(math.max(90, (caption:GetStringWidth() or 40) + 26))
     if button.busy ~= busy then button.busy = busy; tint() end
     height = y + 22 + 10
@@ -672,7 +676,7 @@ C_Timer.NewTicker(1, function()
   if hosting() and Net.channelId() and now - lastHere > 300 then lastHere = now; Net.post("here") end
   stepJob(now)
   Host.step(now)
-  if job or (cfg._noteUntil and now < cfg._noteUntil + 1) or Quota.left() < Quota.LIMIT then paint() end
+  if job or (cfg._noteUntil and now < cfg._noteUntil + 1) or Quota.count() > 0 then paint() end
 end)
 
 -- ===================================================================== commands ==
@@ -691,9 +695,9 @@ SlashCmdList.LAYERETA = function(input)
   elseif cmd == "debug" then
     say("debug")
     print("  LayerETA channel: " .. tostring((Net.channelId())) .. "   layer channel: " .. tostring((layerChannel())))
-    print("  zone map id: " .. tostring((zoneId())) .. "   swaps left: " .. Quota.left())
+    print("  zone map id: " .. tostring((zoneId())) .. "   swaps in the last hour: " .. Quota.count())
     print("  hosting: " .. tostring(hosting()) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
-    print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(sameLayerHosts(), ", "))
+    print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(hostsToSkip(), ", "))
   elseif cmd == "help" or cmd == "?" then say(L("help"))
   else cfg.hidden = not cfg.hidden; paint() end
 end
