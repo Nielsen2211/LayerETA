@@ -72,7 +72,7 @@ local function L(key, ...)
 end
 local function say(msg) print("|cffffd24aLayerETA|r: " .. msg) end
 
-local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, channel = true, others = true }
+local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, channel = false, others = true }
 
 -- ================================================================================== helpers ==
 -- Forever hands some values to addons as "secret": we never read those.
@@ -215,6 +215,7 @@ end
 -- ===================================================================== asking ==
 local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 3600, SKIP_CHARS = 200 }
 local job          -- the swap in progress, or nil
+local Hush         -- keeps group lines out of the chat during a swap (see "silence")
 local lastDoneAt   -- GetTime() when the last swap ended with a move
 local lastPress = -100
 local fightEndedAt = -100
@@ -296,6 +297,8 @@ function Others.available()
 end
 
 local function quiet()
+  -- who answers go to the (silenced) list, not to the chat window
+  if C_FriendList and type(C_FriendList.SetWhoToUi) == "function" then pcall(C_FriendList.SetWhoToUi, true) end
   for _, name in ipairs(LIST_FRAMES) do
     local frame = _G[name]
     if type(frame) == "table" and frame.IsEventRegistered and not quieted[name] then
@@ -313,6 +316,13 @@ local function loud()
   for name, frame in pairs(quieted) do
     pcall(frame.RegisterEvent, frame, "WHO_LIST_UPDATE")
     quieted[name] = nil
+  end
+  if C_FriendList and type(C_FriendList.SetWhoToUi) == "function" then
+    for _, name in ipairs(LIST_FRAMES) do   -- the player has a list open: their own searches stay there
+      local frame = _G[name]
+      if type(frame) == "table" and frame.IsShown and select(2, pcall(frame.IsShown, frame)) == true then return end
+    end
+    pcall(C_FriendList.SetWhoToUi, false)
   end
 end
 
@@ -527,6 +537,7 @@ function Host.onAsk(sender, ticket, zone, skip, flag)
       local log = Host.recent()
       log[#log + 1] = time()
       guestAt = GetTime()
+      Hush.hold(Host.STAY + 10)
       if paint then paint() end
     end
   end)
@@ -558,6 +569,54 @@ function Host.onMessage(parts, sender)
     hostsOnline[sender] = GetTime()
     if job and paint then paint() end
   end
+end
+
+-- ===================================================================== silence ==
+-- A swap should happen without a word in the chat. While LayerETA swaps you, or hosts someone, the
+-- game's own group lines (joins, leaves, invites, loot rules, disband) and the who count are kept out
+-- of the chat windows. Our own channel's join and leave notices are always kept out.
+Hush = { until_ = 0, patterns = nil }
+local GROUP_LINES = {
+  "ERR_JOINED_GROUP_S", "ERR_LEFT_GROUP_S", "ERR_LEFT_GROUP_YOU", "ERR_GROUP_DISBANDED", "ERR_INVITE_PLAYER_S",
+  "ERR_DECLINE_GROUP_S", "ERR_NEW_LEADER_S", "ERR_NEW_LEADER_YOU", "ERR_UNINVITE_YOU", "ERR_GROUP_JOINED",
+  "ERR_RAID_YOU_JOINED", "ERR_SET_LOOT_FREEFORALL", "ERR_SET_LOOT_GROUP", "ERR_SET_LOOT_NBG", "ERR_SET_LOOT_ROUNDROBIN",
+  "ERR_SET_LOOT_MASTER", "ERR_SET_LOOT_THRESHOLD_S", "ERR_PARTY_CONVERTED_TO_RAID", "JOINED_PARTY", "LEFT_PARTY",
+  "WHO_NUM_RESULTS", "ERR_INVITED_TO_GROUP_SS", "ERR_INVITED_ALREADY_IN_GROUP_SS",
+}
+-- a game format string ("%s joins the party.") made into a pattern that matches the filled-in line
+local function asPattern(fmt)
+  fmt = fmt:gsub("|4[^;]*;", "\001")
+  fmt = fmt:gsub("%%%d?%$?s", "\002"):gsub("%%%d?%$?d", "\003")
+  fmt = fmt:gsub("([%(%)%.%[%]%*%+%-%?%^%$%%])", "%%%1")
+  fmt = fmt:gsub("\001", ".-"):gsub("\002", ".+"):gsub("\003", "%%d+")
+  return "^" .. fmt .. "$"
+end
+function Hush.build()
+  Hush.patterns = {}
+  for _, key in ipairs(GROUP_LINES) do
+    local fmt = _G[key]
+    if type(fmt) == "string" and fmt ~= "" then Hush.patterns[#Hush.patterns + 1] = asPattern(fmt) end
+  end
+end
+function Hush.hold(secs) Hush.until_ = math.max(Hush.until_, GetTime() + secs) end
+function Hush.active() return job ~= nil or GetTime() < Hush.until_ end
+local function systemFilter(_, _, line)
+  if not Hush.active() or type(line) ~= "string" or hidden(line) then return false end
+  if not Hush.patterns then Hush.build() end
+  for _, pat in ipairs(Hush.patterns) do if line:find(pat) then return true end end
+  return false
+end
+local function channelFilter(_, _, ...)
+  local want = Net.CHANNEL:lower()
+  for _, v in ipairs({ select(4, ...), select(9, ...) }) do  -- arg4 "5. Name", arg9 "Name"
+    if type(v) == "string" and not hidden(v) and v:lower():find(want, 1, true) then return true end
+  end
+  return false
+end
+if type(ChatFrame_AddMessageEventFilter) == "function" then
+  ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", systemFilter)
+  ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_NOTICE", channelFilter)
+  ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL_NOTICE_USER", channelFilter)
 end
 
 -- ========================================================================= box ==
@@ -901,6 +960,7 @@ C_Timer.NewTicker(1, function()
   local now = GetTime()
   -- while hosting, say "here" now and then, so other hosts know this player hosts too
   if hosting() and Net.channelId() and now - lastHere > 300 then lastHere = now; Net.post("here") end
+  if job then Hush.hold(8) end   -- the lines after a swap (leaving the group) stay quiet too
   stepJob(now)
   Host.step(now)
   if job or (cfg._noteUntil and now < cfg._noteUntil + 1) or Quota.count() > 0 then paint() end
