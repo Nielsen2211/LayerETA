@@ -1,5 +1,6 @@
 -- LayerETA 4: one click to another layer.
 -- Part of the ETA family (LevelETA, GoldETA, CraftETA ...). All code here is our own.
+-- Copyright (c) 2026 Rasmus. All Rights Reserved.
 --
 -- How it works
 --   * In WoW you change layer by joining a group whose leader stands on another layer in the same
@@ -30,7 +31,7 @@ local TEXT = {
   en = {
     title = "LayerETA", swap = "Swap", stop = "Stop", waitBtn = "Wait %s",
     quota = "%d of 10 swaps left this hour", quotaLow = "Only %d swaps left this hour.",
-    hostOn = "Host for others: on", hostOff = "Host for others: off", hostCount = "Host: on, %d invited",
+    hostLabel = "Host for others", hosting = "Hosting", hostCount = "Hosting · %d invited",
     looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
     acceptIt = "Accept the invite from %s", inGroupWait = "In %s's group, waiting for the move",
     moved = "Moved to another layer", leavingIn = "Moved. Leaving the group in %ds",
@@ -48,7 +49,7 @@ local TEXT = {
   da = {
     title = "LayerETA", swap = "Skift", stop = "Stop", waitBtn = "Vent %s",
     quota = "%d af 10 skift tilbage denne time", quotaLow = "Kun %d skift tilbage denne time.",
-    hostOn = "Host for andre: til", hostOff = "Host for andre: fra", hostCount = "Host: til, %d inviteret",
+    hostLabel = "Host for andre", hosting = "Hoster", hostCount = "Hoster · %d inviteret",
     looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
     acceptIt = "Acceptér invitationen fra %s", inGroupWait = "I %s's gruppe, venter på skiftet",
     moved = "Flyttet til et andet lag", leavingIn = "Flyttet. Forlader gruppen om %ds",
@@ -159,7 +160,8 @@ end
 --   "1;took;<ticket>"                         the asker accepted an invite, other hosts stand down.
 --   "1;here"                                  a host says it is online (answer to "1;who").
 --   "1;who"                                   who hosts right now? (sent with an ask, answered by hosts)
-local Net = { TAG = "LETA", CHANNEL = "LayerETAnet", VERSION = "1" }
+-- The channel has a password, so only LayerETA joins it and nobody can type in it by accident.
+local Net = { TAG = "LETA", CHANNEL = "LayerETAnet", KEY = "eta7layer", VERSION = "1" }
 
 function Net.channelId()
   local ok, id = call(GetChannelName, Net.CHANNEL)
@@ -168,7 +170,7 @@ end
 
 function Net.join()
   if Net.channelId() then Net.tidy(); return end
-  call(JoinTemporaryChannel, Net.CHANNEL)
+  call(JoinTemporaryChannel, Net.CHANNEL, Net.KEY)
   if C_Timer then C_Timer.After(2, Net.tidy) end
 end
 
@@ -454,17 +456,40 @@ local info = label(box, FONT_SEMI, 10, 0.75, 0.78, 0.84)
 info:SetPoint("TOPLEFT", 12, -47); info:SetPoint("TOPRIGHT", -12, -47); info:SetJustifyH("LEFT")
 if info.SetWordWrap then info:SetWordWrap(true) end
 
--- the host switch: a line of text you click
+-- the host switch: the label on the left, a small flat switch on the right. The whole row is the
+-- click target. Off: dark track, grey knob left. On: gold track, dark knob right.
 local hostLine = CreateFrame("Button", nil, box)
 hostLine:SetHeight(14)
-local hostText = label(hostLine, FONT_SEMI, 10); hostText:SetPoint("LEFT", 0, 0)
+local hostText = label(hostLine, FONT_SEMI, 10); hostText:SetPoint("LEFT", 2, 0)
+local trackEdge = hostLine:CreateTexture(nil, "ARTWORK")
+trackEdge:SetSize(24, 12); trackEdge:SetPoint("RIGHT", -2, 0)
+trackEdge:SetTexture(IMG .. "SwitchTrack"); trackEdge:SetTexCoord(0, 48 / 64, 0, 24 / 32)
+local trackFill = hostLine:CreateTexture(nil, "ARTWORK", nil, 1)
+trackFill:SetPoint("TOPLEFT", trackEdge, "TOPLEFT", 1, -1); trackFill:SetPoint("BOTTOMRIGHT", trackEdge, "BOTTOMRIGHT", -1, 1)
+trackFill:SetTexture(IMG .. "SwitchTrack"); trackFill:SetTexCoord(0, 48 / 64, 0, 24 / 32)
+local knob = hostLine:CreateTexture(nil, "ARTWORK", nil, 2)
+knob:SetSize(8, 8); knob:SetTexture(IMG .. "SwitchKnob")
+local hostNote = label(box, FONT_SEMI, 9, 0.62, 0.82, 1)
+local function drawSwitch()
+  local on, hot = cfg and cfg.host, hostLine.hot
+  knob:ClearAllPoints()
+  if on then
+    trackEdge:SetVertexColor(0.85, 0.66, 0.24); trackFill:SetVertexColor(hot and 0.92 or 0.85, hot and 0.72 or 0.66, hot and 0.3 or 0.24)
+    knob:SetPoint("RIGHT", trackEdge, "RIGHT", -2, 0); knob:SetVertexColor(0.1, 0.08, 0.03)
+    hostText:SetTextColor(0.91, 0.92, 0.94)
+  else
+    trackEdge:SetVertexColor(0.23, 0.25, 0.29); trackFill:SetVertexColor(hot and 0.2 or 0.16, hot and 0.22 or 0.18, hot and 0.26 or 0.21)
+    knob:SetPoint("LEFT", trackEdge, "LEFT", 2, 0); knob:SetVertexColor(0.55, 0.58, 0.64)
+    hostText:SetTextColor(0.75, 0.78, 0.84)
+  end
+end
 hostLine:SetScript("OnClick", function()
   cfg.host = not cfg.host
   say(cfg.host and L("hostNowOn") or L("hostNowOff"))
   paint()
 end)
-hostLine:SetScript("OnEnter", function() hostText:SetAlpha(0.75) end)
-hostLine:SetScript("OnLeave", function() hostText:SetAlpha(1) end)
+hostLine:SetScript("OnEnter", function() hostLine.hot = true; drawSwitch() end)
+hostLine:SetScript("OnLeave", function() hostLine.hot = false; drawSwitch() end)
 
 -- the gold pill button; grey while a swap runs, then it says Stop
 local button = CreateFrame("Button", nil, box)
@@ -533,6 +558,7 @@ paint = function()
   local quota = L("quota", Quota.left())
   local open = cfg.open and true or false
   rule:SetShown(open); info:SetShown(open); hostLine:SetShown(open); button:SetShown(open)
+  hostNote:SetShown(open and cfg.host and true or false)
   local height = 40
   if open then
     sub:SetText(quota)
@@ -542,9 +568,14 @@ paint = function()
     if status then y = y + math.max(11, info:GetStringHeight() or 11) + 6 end
     hostLine:ClearAllPoints(); hostLine:SetPoint("TOPLEFT", 12, -y); hostLine:SetPoint("TOPRIGHT", -12, -y)
     local hosted = #Host.recent()
-    hostText:SetText(cfg.host and (hosted > 0 and L("hostCount", hosted) or L("hostOn")) or L("hostOff"))
-    if cfg.host then hostText:SetTextColor(0.62, 0.82, 1) else hostText:SetTextColor(0.45, 0.48, 0.55) end
+    hostText:SetText(L("hostLabel"))
+    drawSwitch()
     y = y + 14 + 6
+    if cfg.host then
+      hostNote:ClearAllPoints(); hostNote:SetPoint("TOPLEFT", 14, -(y - 4))
+      hostNote:SetText(hosted > 0 and L("hostCount", hosted) or L("hosting"))
+      y = y + 12 + 4
+    end
     local busy = job ~= nil and not job.inGroupAt
     local spent = not job and Quota.left() == 0
     caption:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swap"))

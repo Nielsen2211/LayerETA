@@ -2,7 +2,7 @@
 
 **LayerETA swaps layer with one click.**
 
-Part of the ETA family with [LevelETA](https://github.com/Nielsen2211/LevelETA) and [GoldETA](https://github.com/Nielsen2211/GoldETA). Same look, and each works on its own. All code in LayerETA is written for LayerETA.
+Part of the ETA family with [LevelETA](https://github.com/Nielsen2211/LevelETA) and [GoldETA](https://github.com/Nielsen2211/GoldETA). Same look, and each works on its own. All code in LayerETA is written for LayerETA. LayerETA uses its own hidden, password protected channel and its own message format.
 
 ![LayerETA](screenshots/layereta-window.png)
 
@@ -20,7 +20,7 @@ Since 20 November 2026 WoW Forever hides which layer anyone is on, so no addon c
 
 ## Hosting
 
-Turn on **Host for others** in the box (or `/leta host`) to help other LayerETA users. You only host while you are alone, out of combat and outside instances, at most 5 invites in 10 minutes. A guest who stays more than 40 seconds is left behind when you leave the little group. Hosting is off by default.
+Turn on the **Host for others** switch in the box (or `/leta host`) to help other LayerETA users. You only host while you are alone, out of combat and outside instances, at most 5 invites in 10 minutes. A guest who stays more than 40 seconds is left behind when you leave the little group. Hosting is off by default.
 
 ## 10 swaps an hour
 
@@ -37,3 +37,7 @@ The game moves a character at most ten times an hour. LayerETA counts them per c
 - `/leta leave <seconds>` how long to stay in the group after the move
 - `/leta debug` what the addon sees right now
 - `/leta da` or `/leta en` Danish or English
+
+## License
+
+Copyright (c) 2026 Rasmus. All Rights Reserved. See [LICENSE](LICENSE). The Inter fonts are under the SIL Open Font License.

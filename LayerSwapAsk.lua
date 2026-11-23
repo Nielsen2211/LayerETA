@@ -1,4 +1,5 @@
 -- LayerETA: ask LayerSwap hosts for an invite.
+-- Copyright (c) 2026 Rasmus. All Rights Reserved.
 --
 -- This file is the only part of LayerETA that talks to another addon. It does one thing: it asks
 -- players who host with LayerSwap for a group invite, in the short request line their hosts answer.
