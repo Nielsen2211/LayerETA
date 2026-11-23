@@ -10,7 +10,7 @@ Part of the ETA family with [LevelETA](https://github.com/Nielsen2211/LevelETA) 
 
 In WoW you change layer by joining a group whose leader stands on another layer in the same zone. The game then moves you, and you can leave again.
 
-1. Click the box to fold it out, then click **Swap**.
+1. Click **Swap layer** (big view) or **Swap** (small view). A click elsewhere on the box switches between the big and the small view; each character remembers its own.
 2. LayerETA sends a short request in its own hidden channel. Players who run LayerETA with **Host for others** on, and stand in your zone, can invite you. If no LayerETA host has invited you within 3 seconds, it also looks up the players in your zone with /who and asks them for an invite in a hidden whisper, so players who host with other layer addons can invite you. If you have joined the public layer channel (`/join layer`), the click also writes `inv` there, so anyone hosting in that channel can invite you too.
 3. LayerETA accepts the first invite and tells the other hosts it is taken.
 4. **Moved?** The game tells addons when it moves you. LayerETA counts the swap and leaves the group a few seconds later.
@@ -32,6 +32,7 @@ LayerETA allows 15 swaps in a rolling hour per character (also across a login). 
 
 - `/leta` show or hide the box
 - `/leta swap` same as the Swap button
+- `/leta big` or `/leta small` big or small view
 - `/leta host` host for others on or off
 - `/leta channel` also write `inv` in the layer channel, on or off
 - `/leta others` also ask other hosts in your zone, on or off

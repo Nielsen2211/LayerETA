@@ -29,7 +29,7 @@ local paint -- redraws the box, set further down
 -- ===================================================================================== text ==
 local TEXT = {
   en = {
-    title = "LayerETA", swap = "Swap", stop = "Stop",
+    title = "LayerETA", swap = "Swap", swapLayer = "Swap layer", stop = "Stop", ready = "Ready", swapping = "Swapping", newSince = "New layer since %s", spentShort = "Next swap in %s", waitShort = "Wait", stepAsk = "Ask", stepInvite = "Invite", stepMove = "Move", hourLabel = "Swaps this hour", small = "Small view", bigView = "Big view",
     quota = "%d/15 swaps this hour", spent = "15 swaps this hour. Next one in %s.", waitBtn = "Wait %s",
     hostLabel = "Host for others", hosting = "Hosting", hostCount = "Hosting · %d invited",
     looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
@@ -41,13 +41,13 @@ local TEXT = {
     fighting = "Not during combat. Try again in a few seconds.",
     noRoute = "No way to ask: the LayerETA channel is not ready and you are not in the layer channel (/join layer).",
     lsOn = "Swap also asks other hosts in your zone for an invite.", lsOff = "Swap no longer asks other hosts in your zone.", lsAsked = "Looking for a host (asked %d players)",
-    hint = "Click: open or close  ·  Drag: move", locked = "Box locked", unlocked = "Box unlocked",
+    hint = "Click: big or small view  ·  Drag: move", locked = "Box locked", unlocked = "Box unlocked",
     hostNowOn = "You now invite LayerETA users in your zone who want another layer.", hostNowOff = "You no longer host.",
     chanOn = "Swap also writes \"inv\" in the layer channel.", chanOff = "Swap no longer writes in the layer channel.",
-    help = "/leta: show or hide  ·  /leta swap  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
+    help = "/leta: show or hide  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
   },
   da = {
-    title = "LayerETA", swap = "Skift", stop = "Stop",
+    title = "LayerETA", swap = "Skift", swapLayer = "Skift lag", stop = "Stop", ready = "Klar", swapping = "Skifter", newSince = "Nyt lag siden %s", spentShort = "Næste skift om %s", waitShort = "Vent", stepAsk = "Spørg", stepInvite = "Invite", stepMove = "Flyt", hourLabel = "Skift denne time", small = "Lille visning", bigView = "Stor visning",
     quota = "%d/15 skift denne time", spent = "15 skift denne time. Næste om %s.", waitBtn = "Vent %s",
     hostLabel = "Host for andre", hosting = "Hoster", hostCount = "Hoster · %d inviteret",
     looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
@@ -59,10 +59,10 @@ local TEXT = {
     fighting = "Ikke i kamp. Prøv igen om et par sekunder.",
     noRoute = "Kan ikke spørge: LayerETA kanalen er ikke klar, og du er ikke i layer kanalen (/join layer).",
     lsOn = "Skift spørger også andre hosts i zonen om en invite.", lsOff = "Skift spørger ikke længere andre hosts i zonen.", lsAsked = "Leder efter en host (spurgte %d spillere)",
-    hint = "Klik: åbn eller luk  ·  Træk: flyt", locked = "Boksen er låst", unlocked = "Boksen er låst op",
+    hint = "Klik: stor eller lille visning  ·  Træk: flyt", locked = "Boksen er låst", unlocked = "Boksen er låst op",
     hostNowOn = "Du inviterer nu LayerETA brugere i din zone, der vil skifte lag.", hostNowOff = "Du hoster ikke længere.",
     chanOn = "Skift skriver også \"inv\" i layer kanalen.", chanOff = "Skift skriver ikke længere i layer kanalen.",
-    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta leave <sekunder>  ·  /leta debug  ·  /leta da|en",
+    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta big|small  ·  /leta host  ·  /leta channel  ·  /leta others  ·  /leta lock  ·  /leta leave <sekunder>  ·  /leta debug  ·  /leta da|en",
   },
 }
 local function L(key, ...)
@@ -216,6 +216,7 @@ end
 -- ===================================================================== asking ==
 local Ask = { WINDOW = 45, OWN_FIRST = 3, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900, USED_FOR = 3600, SKIP_CHARS = 200 }
 local job          -- the swap in progress, or nil
+local lastDoneAt   -- GetTime() when the last swap ended with a move
 local lastPress = -100
 local fightEndedAt = -100
 local hostsOnline, hostsSeenAt = {}, 0
@@ -372,7 +373,7 @@ local function stepJob(now)
   if not j or not j.inGroupAt then return end
   if j.movedAt then
     local leaveAt = j.movedAt + math.max(0, cfg.leaveDelay or 4)
-    if now >= leaveAt then job = nil; quitGroup(); note(L("moved"), 15) end
+    if now >= leaveAt then job = nil; lastDoneAt = now; quitGroup(); note(L("moved"), 15) end
     return
   end
   local waited = now - j.inGroupAt
@@ -468,18 +469,34 @@ function Host.onMessage(parts, sender)
 end
 
 -- ========================================================================= box ==
-local WIDTH = 160
+-- Two views, chosen per character and remembered:
+--   big   : status, one wide Swap button, the three steps of a swap, the hour's swaps as 15 ticks,
+--           and the host switch
+--   small : one line with the status dot, x/15 and a small Swap button
+-- A click on the box (not on a button) switches between them.
+local BIG_W, SMALL_W, PAD = 176, 176, 10
+local C = {
+  text = { 0.91, 0.92, 0.94 }, soft = { 0.55, 0.58, 0.64 }, faint = { 0.42, 0.45, 0.52 },
+  gold = { 0.95, 0.76, 0.31 }, blue = { 0.62, 0.82, 1 }, green = { 0.5, 0.82, 0.5 }, slot = { 0.16, 0.18, 0.21 },
+}
+local function rgb(c) return c[1], c[2], c[3] end
+
 local box = CreateFrame("Frame", "LayerETAFrame", UIParent)
-box:SetSize(WIDTH, 40)
+box:SetSize(BIG_W, 40)
 box:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -220, -520)
 box:SetMovable(true); box:EnableMouse(true); box:SetClampedToScreen(true); box:RegisterForDrag("LeftButton")
 
-local function label(parent, font, size, r, g, b)
+local function label(parent, font, size, color)
   local fs = parent:CreateFontString(nil, "OVERLAY")
   fs:SetFont(font, size, "")
   fs:SetShadowOffset(1, -1); fs:SetShadowColor(0, 0, 0, 0.6)
-  if r then fs:SetTextColor(r, g, b) end
+  if color then fs:SetTextColor(rgb(color)) end
   return fs
+end
+local function flat(parent, layer, color)
+  local t = parent:CreateTexture(nil, layer or "ARTWORK")
+  t:SetColorTexture(1, 1, 1, 1); t:SetVertexColor(rgb(color or C.slot))
+  return t
 end
 
 do -- panel background in three slices, shared with the other ETA addons
@@ -494,43 +511,62 @@ do -- panel background in three slices, shared with the other ETA addons
   middle:SetPoint("TOPLEFT", top, "BOTTOMLEFT"); middle:SetPoint("BOTTOMRIGHT", bottom, "TOPRIGHT")
 end
 
+-- head: mark, name, and a status line with a coloured dot
 local mark = box:CreateTexture(nil, "ARTWORK")
-mark:SetSize(26, 26); mark:SetPoint("TOPLEFT", 8, -8); mark:SetTexture(IMG .. "Mark")
-local head = label(box, FONT_BOLD, 12, 0.91, 0.92, 0.94); head:SetPoint("TOPLEFT", 40, -8)
-local sub = label(box, FONT_SEMI, 10, 0.55, 0.58, 0.64); sub:SetPoint("TOPLEFT", 40, -23)
-sub:SetWidth(WIDTH - 48); sub:SetJustifyH("LEFT"); if sub.SetWordWrap then sub:SetWordWrap(false) end
+mark:SetSize(24, 24); mark:SetPoint("TOPLEFT", 9, -8); mark:SetTexture(IMG .. "Mark")
+local head = label(box, FONT_BOLD, 12, C.text); head:SetPoint("TOPLEFT", 40, -8)
+local dot = box:CreateTexture(nil, "ARTWORK"); dot:SetSize(6, 6); dot:SetTexture(IMG .. "SwitchKnob")
+dot:SetPoint("TOPLEFT", 40, -26)
+local sub = label(box, FONT_SEMI, 10, C.soft); sub:SetPoint("LEFT", dot, "RIGHT", 4, 0)
+sub:SetJustifyH("LEFT"); if sub.SetWordWrap then sub:SetWordWrap(false) end
 
-local rule = box:CreateTexture(nil, "ARTWORK"); rule:SetHeight(1); rule:SetColorTexture(1, 1, 1, 0.06)
-rule:SetPoint("TOPLEFT", 12, -40); rule:SetPoint("TOPRIGHT", -12, -40)
+-- big view parts
+local big = CreateFrame("Frame", nil, box); big:SetAllPoints()
+local rule1 = flat(big, "ARTWORK", { 1, 1, 1 }); rule1:SetAlpha(0.06); rule1:SetHeight(1)
 
-local info = label(box, FONT_SEMI, 10, 0.75, 0.78, 0.84)
-info:SetPoint("TOPLEFT", 12, -47); info:SetPoint("TOPRIGHT", -12, -47); info:SetJustifyH("LEFT")
-if info.SetWordWrap then info:SetWordWrap(true) end
+local steps = {}
+for i = 1, 3 do
+  local bar = flat(big); bar:SetHeight(2)
+  local word = label(big, FONT_SEMI, 9, C.faint)
+  steps[i] = { bar = bar, word = word }
+end
+local msg = label(big, FONT_SEMI, 10, C.text); msg:SetJustifyH("LEFT")
+if msg.SetWordWrap then msg:SetWordWrap(true) end
 
--- the host switch: the label on the left, a small flat switch on the right. The whole row is the
--- click target. Off: dark track, grey knob left. On: gold track, dark knob right.
-local hostLine = CreateFrame("Button", nil, box)
-hostLine:SetHeight(14)
-local hostText = label(hostLine, FONT_SEMI, 10); hostText:SetPoint("LEFT", 2, 0)
+-- the wide Swap button: gold, flat, a little darker under the mouse; grey while a swap runs
+local wide = CreateFrame("Button", nil, big); wide:SetHeight(28)
+local wideBg = wide:CreateTexture(nil, "BACKGROUND"); wideBg:SetAllPoints()
+wideBg:SetTexture(IMG .. "Bar"); wideBg:SetTexCoord(0, 300 / 512, 0, 56 / 64)
+local wideText = label(wide, FONT_BOLD, 12); wideText:SetPoint("CENTER"); wideText:SetShadowOffset(0, 0)
+
+local hourLeft = label(big, FONT_SEMI, 9, C.faint)
+local hourRight = label(big, FONT_SEMI, 9, C.faint)
+local ticks = {}
+for i = 1, 15 do ticks[i] = flat(big) end
+local rule2 = flat(big, "ARTWORK", { 1, 1, 1 }); rule2:SetAlpha(0.06); rule2:SetHeight(1)
+
+-- the host switch: label left, a small flat switch right; the whole row is the click target
+local hostLine = CreateFrame("Button", nil, big); hostLine:SetHeight(14)
+local hostText = label(hostLine, FONT_SEMI, 10); hostText:SetPoint("LEFT", 0, 0)
 local trackEdge = hostLine:CreateTexture(nil, "ARTWORK")
-trackEdge:SetSize(24, 12); trackEdge:SetPoint("RIGHT", -2, 0)
+trackEdge:SetSize(24, 12); trackEdge:SetPoint("RIGHT", 0, 0)
 trackEdge:SetTexture(IMG .. "SwitchTrack"); trackEdge:SetTexCoord(0, 48 / 64, 0, 24 / 32)
 local trackFill = hostLine:CreateTexture(nil, "ARTWORK", nil, 1)
 trackFill:SetPoint("TOPLEFT", trackEdge, "TOPLEFT", 1, -1); trackFill:SetPoint("BOTTOMRIGHT", trackEdge, "BOTTOMRIGHT", -1, 1)
 trackFill:SetTexture(IMG .. "SwitchTrack"); trackFill:SetTexCoord(0, 48 / 64, 0, 24 / 32)
-local knob = hostLine:CreateTexture(nil, "ARTWORK", nil, 2)
-knob:SetSize(8, 8); knob:SetTexture(IMG .. "SwitchKnob")
-local hostNote = label(box, FONT_SEMI, 9, 0.62, 0.82, 1)
+local knob = hostLine:CreateTexture(nil, "ARTWORK", nil, 2); knob:SetSize(8, 8); knob:SetTexture(IMG .. "SwitchKnob")
+local hostNote = label(big, FONT_SEMI, 9, C.blue)
+
 local function drawSwitch()
   local on, hot = cfg and hosting(), hostLine.hot
   knob:ClearAllPoints()
   if on then
     trackEdge:SetVertexColor(0.85, 0.66, 0.24); trackFill:SetVertexColor(hot and 0.92 or 0.85, hot and 0.72 or 0.66, hot and 0.3 or 0.24)
     knob:SetPoint("RIGHT", trackEdge, "RIGHT", -2, 0); knob:SetVertexColor(0.1, 0.08, 0.03)
-    hostText:SetTextColor(0.91, 0.92, 0.94)
+    hostText:SetTextColor(rgb(C.text))
   else
     trackEdge:SetVertexColor(0.23, 0.25, 0.29); trackFill:SetVertexColor(hot and 0.2 or 0.16, hot and 0.22 or 0.18, hot and 0.26 or 0.21)
-    knob:SetPoint("LEFT", trackEdge, "LEFT", 2, 0); knob:SetVertexColor(0.55, 0.58, 0.64)
+    knob:SetPoint("LEFT", trackEdge, "LEFT", 2, 0); knob:SetVertexColor(rgb(C.soft))
     hostText:SetTextColor(0.75, 0.78, 0.84)
   end
 end
@@ -542,28 +578,39 @@ end)
 hostLine:SetScript("OnEnter", function() hostLine.hot = true; drawSwitch() end)
 hostLine:SetScript("OnLeave", function() hostLine.hot = false; drawSwitch() end)
 
--- the gold pill button; grey while a swap runs, then it says Stop
-local button = CreateFrame("Button", nil, box)
-button:SetSize(90, 22); button:SetPoint("BOTTOM", 0, 10)
-local pill = button:CreateTexture(nil, "BACKGROUND"); pill:SetAllPoints()
-pill:SetTexture(IMG .. "Button"); pill:SetTexCoord(0, 240 / 256, 0, 48 / 64)
-local caption = button:CreateFontString(nil, "OVERLAY"); caption:SetFont(FONT_BOLD, 11, ""); caption:SetPoint("CENTER")
-local function tint()
-  local hot = button.hot
-  if button.busy then
-    pill:SetVertexColor(hot and 0.34 or 0.26, hot and 0.36 or 0.28, hot and 0.42 or 0.33)
-    caption:SetTextColor(0.91, 0.92, 0.94); caption:SetShadowOffset(1, -1); caption:SetShadowColor(0, 0, 0, 0.6)
+-- small view: a small pill button at the right end of the head line
+local mini = CreateFrame("Button", nil, box); mini:SetSize(54, 20); mini:SetPoint("RIGHT", box, "TOPRIGHT", -PAD, -20)
+local miniBg = mini:CreateTexture(nil, "BACKGROUND"); miniBg:SetAllPoints()
+miniBg:SetTexture(IMG .. "Button"); miniBg:SetTexCoord(0, 240 / 256, 0, 48 / 64)
+local miniText = label(mini, FONT_BOLD, 10); miniText:SetPoint("CENTER"); miniText:SetShadowOffset(0, 0)
+
+local function paintButton(btn, bg, txt)
+  local hot = btn.hot
+  if btn.busy then
+    bg:SetVertexColor(hot and 0.3 or 0.17, hot and 0.32 or 0.18, hot and 0.37 or 0.21); txt:SetTextColor(rgb(C.text))
   else
-    pill:SetVertexColor(1, hot and 0.88 or 0.8, hot and 0.5 or 0.33)
-    caption:SetTextColor(0.1, 0.08, 0.03); caption:SetShadowOffset(0, 0)
+    bg:SetVertexColor(hot and 1 or 0.95, hot and 0.82 or 0.76, hot and 0.38 or 0.31); txt:SetTextColor(0.1, 0.08, 0.03)
   end
 end
-button:SetScript("OnEnter", function() button.hot = true; tint() end)
-button:SetScript("OnLeave", function() button.hot = false; tint(); caption:SetPoint("CENTER", 0, 0) end)
-button:SetScript("OnMouseDown", function() caption:SetPoint("CENTER", 0, -1) end)
-button:SetScript("OnMouseUp", function() caption:SetPoint("CENTER", 0, 0) end)
-button:SetScript("OnClick", function() startSwap() end)
-tint()
+for _, b in ipairs({ { wide, wideBg, wideText }, { mini, miniBg, miniText } }) do
+  local btn, bg, txt = b[1], b[2], b[3]
+  btn:SetScript("OnEnter", function() btn.hot = true; paintButton(btn, bg, txt) end)
+  btn:SetScript("OnLeave", function() btn.hot = false; paintButton(btn, bg, txt); txt:SetPoint("CENTER", 0, 0) end)
+  btn:SetScript("OnMouseDown", function() txt:SetPoint("CENTER", 0, -1) end)
+  btn:SetScript("OnMouseUp", function() txt:SetPoint("CENTER", 0, 0) end)
+  btn:SetScript("OnClick", function() startSwap() end)
+end
+
+-- the view is stored per character
+local function view()
+  local v = type(cfg.viewFor) == "table" and cfg.viewFor[myName() or "?"]
+  return v == "small" and "small" or "big"
+end
+local function setView(v)
+  cfg.viewFor = type(cfg.viewFor) == "table" and cfg.viewFor or {}
+  cfg.viewFor[myName() or "?"] = v
+  paint()
+end
 
 box:SetScript("OnDragStart", function(self) self.dragging = true; if not cfg.locked then self:StartMoving() end end)
 box:SetScript("OnDragStop", function(self)
@@ -573,13 +620,25 @@ box:SetScript("OnDragStop", function(self)
 end)
 box:SetScript("OnMouseUp", function(self, which)
   if self.dragging then self.dragging = nil; return end
-  if which == "LeftButton" and cfg then cfg.open = not cfg.open; paint() end
+  if which == "LeftButton" and cfg then setView(view() == "big" and "small" or "big") end
 end)
 box:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine("LayerETA", 1, 0.82, 0.3)
   GameTooltip:AddLine(L("hint"), 0.6, 0.6, 0.6); GameTooltip:Show()
 end)
 box:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+-- where a swap is: 0 nothing, 1 asking, 2 invited or in the group, 3 moved
+local function stage()
+  local j = job
+  if j then
+    if j.movedAt then return 3 end
+    if j.host then return 2 end
+    return 1
+  end
+  if lastDoneAt and GetTime() - lastDoneAt < 10 then return 3 end
+  return 0
+end
 
 local function jobText()
   local j = job
@@ -599,43 +658,99 @@ local function jobText()
   return n > 0 and L("lookingN", n) or L("looking")
 end
 
+-- the line under the name, and its dot: green ready, blue swapping, gold for a fresh layer
+local function headline()
+  if job then return L("swapping"), C.blue end
+  if Quota.full() then return L("spentShort", Quota.untilNext()), C.faint end
+  local log = Quota.list()
+  local last = log[#log]
+  if last and time() - last < 600 then return L("newSince", date("%H:%M", last)), C.gold end
+  return L("ready"), C.green
+end
+
 paint = function()
   if not cfg then return end
   if cfg.hidden then box:Hide(); return end
   box:Show()
   if box.scaleNow ~= cfg.scale then box.scaleNow = cfg.scale; box:SetScale(cfg.scale or 1) end
   head:SetText(L("title"))
-  local status = jobText()
-  local quota = L("quota", Quota.count())
-  local open = cfg.open and true or false
-  rule:SetShown(open); info:SetShown(open); hostLine:SetShown(open); button:SetShown(open)
-  hostNote:SetShown(open and hosting())
-  local height = 40
-  if open then
-    sub:SetText(quota)
-    local y = 47
-    info:ClearAllPoints(); info:SetPoint("TOPLEFT", 12, -y); info:SetPoint("TOPRIGHT", -12, -y)
-    info:SetText(status or "")
-    if status then y = y + math.max(11, info:GetStringHeight() or 11) + 6 end
-    hostLine:ClearAllPoints(); hostLine:SetPoint("TOPLEFT", 12, -y); hostLine:SetPoint("TOPRIGHT", -12, -y)
-    local hosted = #Host.recent()
-    hostText:SetText(L("hostLabel"))
-    drawSwitch()
-    y = y + 14 + 6
-    if hosting() then
-      hostNote:ClearAllPoints(); hostNote:SetPoint("TOPLEFT", 14, -(y - 4))
-      hostNote:SetText(hosted > 0 and L("hostCount", hosted) or L("hosting"))
-      y = y + 12 + 4
-    end
-    local busy = job ~= nil and not job.inGroupAt
-    local spent = not job and Quota.full()
-    caption:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swap"))
-    button:SetWidth(math.max(90, (caption:GetStringWidth() or 40) + 26))
-    if button.busy ~= busy then button.busy = busy; tint() end
-    height = y + 22 + 10
-  else
-    sub:SetText(status or quota)
+  local line, color = headline()
+  dot:SetVertexColor(rgb(color))
+  local count = Quota.count()
+  local busy = job ~= nil and not job.inGroupAt
+  local spent = not job and Quota.full()
+  local isBig = view() == "big"
+  big:SetShown(isBig); mini:SetShown(not isBig)
+
+  if not isBig then
+    box:SetWidth(SMALL_W)
+    sub:SetText(line .. "  ·  " .. count .. "/15")
+    sub:SetWidth(SMALL_W - 40 - 64)
+    miniText:SetText(busy and L("stop") or (spent and L("waitShort")) or L("swap"))
+    mini.busy = busy or spent; paintButton(mini, miniBg, miniText)
+    if box.heightNow ~= 40 then box.heightNow = 40; box:SetHeight(40) end
+    return
   end
+
+  box:SetWidth(BIG_W)
+  sub:SetText(line); sub:SetWidth(BIG_W - 56)
+  local inner = BIG_W - 2 * PAD
+  local y = 40
+  rule1:ClearAllPoints(); rule1:SetPoint("TOPLEFT", PAD, -y); rule1:SetPoint("TOPRIGHT", -PAD, -y)
+  y = y + 8
+
+  -- the three steps, shown while a swap runs and a moment after it moved you
+  local now = stage()
+  local stepW = (inner - 8) / 3
+  local names = { L("stepAsk"), L("stepInvite"), L("stepMove") }
+  for i, st in ipairs(steps) do
+    st.bar:SetShown(now > 0); st.word:SetShown(now > 0)
+    if now > 0 then
+      st.bar:ClearAllPoints(); st.bar:SetPoint("TOPLEFT", PAD + (i - 1) * (stepW + 4), -y); st.bar:SetWidth(stepW)
+      st.word:ClearAllPoints(); st.word:SetPoint("TOP", st.bar, "BOTTOM", 0, -4); st.word:SetText(names[i])
+      local c = (i < now or now == 3) and C.gold or (i == now and C.blue) or C.slot
+      st.bar:SetVertexColor(rgb(c))
+      st.word:SetTextColor(rgb((i < now or now == 3) and { 0.75, 0.78, 0.84 } or (i == now and C.blue) or C.faint))
+    end
+  end
+  if now > 0 then y = y + 20 end
+
+  local status = jobText()
+  msg:SetShown(status ~= nil)
+  if status then
+    msg:ClearAllPoints(); msg:SetPoint("TOPLEFT", PAD, -y); msg:SetWidth(inner)
+    msg:SetText(status)
+    y = y + math.max(12, msg:GetStringHeight() or 12) + 7
+  end
+
+  wide:ClearAllPoints(); wide:SetPoint("TOPLEFT", PAD, -y); wide:SetWidth(inner)
+  wideText:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swapLayer"))
+  wide.busy = busy or spent; paintButton(wide, wideBg, wideText)
+  y = y + 28 + 10
+
+  hourLeft:ClearAllPoints(); hourLeft:SetPoint("TOPLEFT", PAD, -y); hourLeft:SetText(L("hourLabel"))
+  hourRight:ClearAllPoints(); hourRight:SetPoint("TOPRIGHT", -PAD, -y); hourRight:SetText(count .. "/15")
+  y = y + 14
+  local tickW = (inner - 14 * 2) / 15
+  for i, t in ipairs(ticks) do
+    t:ClearAllPoints(); t:SetPoint("TOPLEFT", PAD + (i - 1) * (tickW + 2), -y); t:SetSize(tickW, 4)
+    t:SetVertexColor(rgb(i <= count and C.gold or C.slot))
+  end
+  y = y + 4 + 9
+  rule2:ClearAllPoints(); rule2:SetPoint("TOPLEFT", PAD, -y); rule2:SetPoint("TOPRIGHT", -PAD, -y)
+  y = y + 8
+
+  hostLine:ClearAllPoints(); hostLine:SetPoint("TOPLEFT", PAD, -y); hostLine:SetPoint("TOPRIGHT", -PAD, -y)
+  hostText:SetText(L("hostLabel")); drawSwitch()
+  y = y + 14
+  hostNote:SetShown(hosting())
+  if hosting() then
+    local hosted = #Host.recent()
+    hostNote:ClearAllPoints(); hostNote:SetPoint("TOPLEFT", PAD, -(y + 2))
+    hostNote:SetText(hosted > 0 and L("hostCount", hosted) or L("hosting"))
+    y = y + 14
+  end
+  local height = y + 10
   if box.heightNow ~= height then box.heightNow = height; box:SetHeight(height) end
 end
 
@@ -677,7 +792,10 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   elseif ev == "GROUP_JOINED" or ev == "GROUP_ROSTER_UPDATE" then
     onJoined()
   elseif ev == "GROUP_LEFT" then
-    if job and job.inGroupAt then finish(job.movedAt and L("moved") or nil, 10) end
+    if job and job.inGroupAt then
+      if job.movedAt then lastDoneAt = GetTime() end
+      finish(job.movedAt and L("moved") or nil, 10)
+    end
   elseif ev == "SHARD_TRANSFER" then
     onMoved()
   elseif ev == "WHO_LIST_UPDATE" then
@@ -706,6 +824,7 @@ SlashCmdList.LAYERETA = function(input)
   elseif cmd == "host" then setHosting(not hosting()); say(hosting() and L("hostNowOn") or L("hostNowOff")); paint()
   elseif cmd == "channel" then cfg.channel = not cfg.channel; say(cfg.channel and L("chanOn") or L("chanOff"))
   elseif cmd == "others" then cfg.layerswap = not cfg.layerswap; say(cfg.layerswap and L("lsOn") or L("lsOff"))
+  elseif cmd == "small" or cmd == "big" then setView(cmd)
   elseif cmd == "lock" then cfg.locked = not cfg.locked; say(cfg.locked and L("locked") or L("unlocked"))
   elseif cmd == "leave" and tonumber(arg) then cfg.leaveDelay = math.max(0, math.min(120, tonumber(arg)))
   elseif cmd == "da" or cmd == "en" then cfg.lang = cmd; paint()
