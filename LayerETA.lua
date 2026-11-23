@@ -8,8 +8,8 @@
 --   * LayerETA users help each other: anyone can turn on "Host for others". Hosts sit in a hidden
 --     LayerETA channel. A click on Swap sends one short request there, and a host in your zone
 --     invites you. Requests and answers use LayerETA's own message format (see Net below).
---   * The click also asks players who host with LayerSwap for an invite (LayerSwapAsk.lua, our own
---     code that only sends their request line). /leta others turns that off.
+--   * The click also asks other hosts in the zone for an invite (HostAsk.lua, our own code that only
+--     sends a request line). /leta others turns that off.
 --   * Optionally the click also writes "inv" in the public layer channel, if you have joined it,
 --     so any player hosting there can invite you too.
 --   * Since 20 Nov 2026 Forever hides which layer anyone is on, so no host knows if it stands on
@@ -40,7 +40,7 @@ local TEXT = {
     notHere = "Swapping works in the open world, not in here.", grouped = "Leave your group first.",
     fighting = "Not during combat. Try again in a few seconds.",
     noRoute = "No way to ask: the LayerETA channel is not ready and you are not in the layer channel (/join layer).",
-    lsOn = "Swap also asks other hosts in your zone for an invite.", lsOff = "Swap no longer asks other hosts in your zone.", lsAsked = "Looking for a host (asked %d players)",
+    othersOn = "Swap also asks other hosts in your zone for an invite.", othersOff = "Swap no longer asks other hosts in your zone.", othersAsked = "Looking for a host (asked %d players)",
     hint = "Click: big or small view  ·  Drag: move", locked = "Box locked", unlocked = "Box unlocked",
     hostNowOn = "You now invite LayerETA users in your zone who want another layer.", hostNowOff = "You no longer host.",
     chanOn = "Swap also writes \"inv\" in the layer channel.", chanOff = "Swap no longer writes in the layer channel.",
@@ -58,7 +58,7 @@ local TEXT = {
     notHere = "Skift virker ude i verden, ikke herinde.", grouped = "Forlad din gruppe først.",
     fighting = "Ikke i kamp. Prøv igen om et par sekunder.",
     noRoute = "Kan ikke spørge: LayerETA kanalen er ikke klar, og du er ikke i layer kanalen (/join layer).",
-    lsOn = "Skift spørger også andre hosts i zonen om en invite.", lsOff = "Skift spørger ikke længere andre hosts i zonen.", lsAsked = "Leder efter en host (spurgte %d spillere)",
+    othersOn = "Skift spørger også andre hosts i zonen om en invite.", othersOff = "Skift spørger ikke længere andre hosts i zonen.", othersAsked = "Leder efter en host (spurgte %d spillere)",
     hint = "Klik: stor eller lille visning  ·  Træk: flyt", locked = "Boksen er låst", unlocked = "Boksen er låst op",
     hostNowOn = "Du inviterer nu LayerETA brugere i din zone, der vil skifte lag.", hostNowOff = "Du hoster ikke længere.",
     chanOn = "Skift skriver også \"inv\" i layer kanalen.", chanOff = "Skift skriver ikke længere i layer kanalen.",
@@ -73,7 +73,7 @@ local function L(key, ...)
 end
 local function say(msg) print("|cffffd24aLayerETA|r: " .. msg) end
 
-local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, channel = true, layerswap = true }
+local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, channel = true, others = true }
 
 -- ================================================================================== helpers ==
 -- Forever hands some values to addons as "secret": we never read those.
@@ -285,9 +285,9 @@ local function startSwap()
 
   local useNet = Net.ready()
   local chan = cfg.channel and layerChannel() or nil
-  local LS = ns.LayerSwapAsk
-  local useLS = cfg.layerswap and LS and LS.available() and zoneId() ~= nil
-  if not useNet and not chan and not useLS then note(L("noRoute"), 12); return end
+  local ext = ns.HostAsk
+  local useExt = cfg.others and ext and ext.available() and zoneId() ~= nil
+  if not useNet and not chan and not useExt then note(L("noRoute"), 12); return end
   lastPress = now
 
   local ticket = string.format("%05d%04d", time() % 100000, math.random(0, 9999))
@@ -302,14 +302,14 @@ local function startSwap()
   job = mine
   -- LayerETA hosts always come first. Other hosts in the zone are only asked when no LayerETA host
   -- has invited within a few seconds (or at once, when our own channel is not ready).
-  if useLS then
+  if useExt then
     local function askOthers()
       if job ~= mine or mine.host then return end
       local zone = zoneId()
       local x, y = spot(zone)
       local skip = {}
       for _, who in ipairs(hostsToSkip()) do skip[who] = true end
-      LS.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end, skip)
+      ext.start(zone, zoneName(zone), x, y, function() return job == mine and not mine.host end, skip)
     end
     if useNet then C_Timer.After(Ask.OWN_FIRST, askOthers) else askOthers() end
   end
@@ -652,8 +652,8 @@ local function jobText()
   end
   if j.inGroupAt then return L("inGroupWait", bare(j.host) or "?") end
   if j.host then return j.manual and L("acceptIt", bare(j.host) or "?") or L("invitedBy", bare(j.host) or "?") end
-  local asked = ns.LayerSwapAsk and ns.LayerSwapAsk.sentCount() or 0
-  if asked > 0 then return L("lsAsked", asked) end
+  local asked = ns.HostAsk and ns.HostAsk.sentCount() or 0
+  if asked > 0 then return L("othersAsked", asked) end
   local n = countHosts()
   return n > 0 and L("lookingN", n) or L("looking")
 end
@@ -799,7 +799,7 @@ events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   elseif ev == "SHARD_TRANSFER" then
     onMoved()
   elseif ev == "WHO_LIST_UPDATE" then
-    if ns.LayerSwapAsk then ns.LayerSwapAsk.onWhoList(myName()) end
+    if ns.HostAsk then ns.HostAsk.onWhoList(myName()) end
   end
 end)
 
@@ -823,7 +823,7 @@ SlashCmdList.LAYERETA = function(input)
   if cmd == "swap" then startSwap()
   elseif cmd == "host" then setHosting(not hosting()); say(hosting() and L("hostNowOn") or L("hostNowOff")); paint()
   elseif cmd == "channel" then cfg.channel = not cfg.channel; say(cfg.channel and L("chanOn") or L("chanOff"))
-  elseif cmd == "others" then cfg.layerswap = not cfg.layerswap; say(cfg.layerswap and L("lsOn") or L("lsOff"))
+  elseif cmd == "others" then cfg.others = not cfg.others; say(cfg.others and L("othersOn") or L("othersOff"))
   elseif cmd == "small" or cmd == "big" then setView(cmd)
   elseif cmd == "lock" then cfg.locked = not cfg.locked; say(cfg.locked and L("locked") or L("unlocked"))
   elseif cmd == "leave" and tonumber(arg) then cfg.leaveDelay = math.max(0, math.min(120, tonumber(arg)))
