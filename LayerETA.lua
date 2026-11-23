@@ -31,7 +31,7 @@ local TEXT = {
     title = "LayerETA", swap = "Swap", swapLayer = "Swap layer", stop = "Stop", ready = "Ready", swapping = "Swapping", newSince = "New layer since %s", spentShort = "Next swap in %s", waitShort = "Wait", stepAsk = "Ask", stepInvite = "Invite", stepMove = "Move", hourLabel = "Swaps this hour", small = "Small view", bigView = "Big view",
     quota = "%d/15 swaps this hour", spent = "15 swaps this hour. Next one in %s.", waitBtn = "Wait %s",
     hostLabel = "Host for others", hosting = "Hosting", hostCount = "Hosting · %d invited",
-    looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
+    looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", lookingOne = "Looking for a host (1 host online)", invitedBy = "Invited by %s",
     acceptIt = "Accept the invite from %s", inGroupWait = "In %s's group, waiting for the move",
     moved = "Moved to another layer", leavingIn = "Moved. Leaving the group in %ds",
     sameLayer = "%s is on your layer. Left the group.", refused = "The game did not move you. Try again in a little while.",
@@ -49,7 +49,7 @@ local TEXT = {
     title = "LayerETA", swap = "Skift", swapLayer = "Skift lag", stop = "Stop", ready = "Klar", swapping = "Skifter", newSince = "Nyt lag siden %s", spentShort = "Næste skift om %s", waitShort = "Vent", stepAsk = "Spørg", stepInvite = "Invite", stepMove = "Flyt", hourLabel = "Skift denne time", small = "Lille visning", bigView = "Stor visning",
     quota = "%d/15 skift denne time", spent = "15 skift denne time. Næste om %s.", waitBtn = "Vent %s",
     hostLabel = "Host for andre", hosting = "Hoster", hostCount = "Hoster · %d inviteret",
-    looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
+    looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", lookingOne = "Leder efter en host (1 host online)", invitedBy = "Inviteret af %s",
     acceptIt = "Acceptér invitationen fra %s", inGroupWait = "I %s's gruppe, venter på skiftet",
     moved = "Flyttet til et andet lag", leavingIn = "Flyttet. Forlader gruppen om %ds",
     sameLayer = "%s er på dit lag. Forlod gruppen.", refused = "Spillet flyttede dig ikke. Prøv igen om lidt.",
@@ -713,8 +713,8 @@ local msg = label(big, FONT_SEMI, 11, C.text); msg:SetJustifyH("LEFT")
 if msg.SetWordWrap then msg:SetWordWrap(true) end
 if msg.SetMaxLines then msg:SetMaxLines(3) end
 
--- the wide Swap button
-local wide = pill(big, INNER, 24, 12)
+-- the Swap button: sized to its label like LevelETA's buttons, not the full width
+local wide = pill(big, 96, 24, 12)
 
 local hourLeft = label(big, FONT_SEMI, 11, C.soft)
 local ticks = {}
@@ -804,6 +804,7 @@ local function jobText()
   local asked = Others.sentCount()
   if asked > 0 then return L("othersAsked", asked) end
   local n = countHosts()
+  if n == 1 then return L("lookingOne") end
   return n > 0 and L("lookingN", n) or L("looking")
 end
 
@@ -870,6 +871,7 @@ paint = function()
 
   wide:ClearAllPoints(); wide:SetPoint("TOPLEFT", PAD, -y)
   wide.text:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swapLayer"))
+  wide:SetWidth(math.min(INNER, math.max(96, math.ceil((wide.text:GetStringWidth() or 60) + 36))))
   wide.busy = spent; wide:paint()
   y = y + 24 + 12
 
