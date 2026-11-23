@@ -1,742 +1,599 @@
--- LayerETA: viser hvilket lag du er paa, og skifter lag med et klik. Ingen hosting.
--- Samme stil som LevelETA og GoldETA. Koden er skrevet fra bunden.
+-- LayerETA 4: one click to another layer.
+-- Part of the ETA family (LevelETA, GoldETA, CraftETA ...). All code here is our own.
 --
--- Saadan virker et skift i WoW Forever: du skifter lag ved at joine en gruppe, hvor lederen staar i
--- samme zone paa et andet lag. De fleste hosts koerer LayerSwap (eller Bulo / Simple Layer, som taler
--- samme "sprog"), saa LayerETA sender en anmodning i det format, de svarer paa:
---   * laget laeses fra en NPC's GUID: Creature-0-<server>-<instans>-<zoneUID>-... Laget er <server>,
---     og id'et der sendes er "<server>-<zoneUID>"
---   * LayerETA sender aldrig selv beskeder til nogen. Anmodningen laegges i din chatboks til layer-kanalen,
---     og du sender den selv med Enter:
---       inv layer <LS <zone map id> not <dit lag-id> <x>,<y>>
---   * en host paa et andet lag inviterer. En host paa dit eget lag svarer "same", andre brugere "heard ..."
---   * efter joinet flytter spillet dig (SHARD_TRANSFER), og LayerETA forlader gruppen igen lidt efter
-local ADDON = "LayerETA"
-local PATH = "Interface\\AddOns\\LayerETA\\"
-local TEX = PATH .. "Textures\\"
-local F_SEMI = PATH .. "Fonts\\Inter-SemiBold.ttf"
-local F_BOLD = PATH .. "Fonts\\Inter-Bold.ttf"
+-- How it works
+--   * In WoW you change layer by joining a group whose leader stands on another layer in the same
+--     zone. The game then moves you (SHARD_TRANSFER) and you can leave again.
+--   * LayerETA users help each other: anyone can turn on "Host for others". Hosts sit in a hidden
+--     LayerETA channel. A click on Swap sends one short request there, and a host in your zone
+--     invites you. Requests and answers use LayerETA's own message format (see Net below).
+--   * Optionally the click also writes "inv" in the public layer channel, if you have joined it,
+--     so any player hosting there can invite you too.
+--   * Since 20 Nov 2026 Forever hides which layer anyone is on, so no host knows if it stands on
+--     your layer. LayerETA finds out after the join from how the game marks the host in your group,
+--     and remembers hosts that turned out to share your layer, so they are skipped next time.
 
-local PREFIX = "LayerSwap"   -- det prefix hosts lytter paa
-local BOOK_TTL = 7 * 86400   -- kendte hosts huskes en uge og spoerges foerst
-local ASK_TTL = 60           -- saa laenge venter et klik paa en invite
-local NO_MOVE_LEAVE = 15     -- joinet, ingen flytning og intet maerke paa hosten efter saa mange sekunder: forlad gruppen
-local COOLDOWN = 5
-local DB
+local NAME = "LayerETA"
+local DIR = "Interface\\AddOns\\LayerETA\\"
+local IMG = DIR .. "Textures\\"
+local FONT_SEMI = DIR .. "Fonts\\Inter-SemiBold.ttf"
+local FONT_BOLD = DIR .. "Fonts\\Inter-Bold.ttf"
 
-local LOC = {
-  en = { movedNew = "Moved to another layer", left = "%d of 10 swaps left this hour", wait = "No swaps left: wait %s", fewLeft = "%d swaps left this hour.", blindSub = "Layers can't be told apart on Forever", layer = "Layer", unknown = "Target an NPC", swap = "Swap", stop = "Stop", back = "Back to %s", seen = "Layers here", goingTo = "Looking for %s",
-    needNpc = "Target or mouse over an NPC first, so your layer is known.", inGroup = "You are in a group. Leave it to swap layer.",
-    inInstance = "No layers in here. Swap layer works in the open world.", pressEnter = "Press Enter to send your request", sent = "Asking, waiting for an invite", joinChan = "Join the layer channel first: type /join layer",
-    asking = "Asking %d players", heard = "Waiting, %d heard", nobody = "Found nobody to ask. Try again in a moment.", noSearch = "The player search is not available on this client.", asked = "Asked %d players",
-    askedAll = "Everyone here was asked already. Click again to ask more.", noAnswer = "No host answered. Try again in a moment.",
-    invited = "Invited by %s", joined = "Joined, waiting for the move", moved = "Moved to %s", leaving = "Leaving in %ds",
-    notMoved = "%s is on your layer. Left the group.", refused = "The game refused the move: your 10 swaps this hour may be used. Try again later.", combat = "Not in combat. Try again in a few seconds.", whoFail = "The player search did not start. Try again in a moment.",
-    stopped = "Stopped", hint = "Click: open or close  ·  Drag: move", acceptHint = "Accept the invite from %s", locked = "Window locked", unlocked = "Window unlocked",
-    help = "/leta: show or hide  ·  /leta swap  ·  /leta lock  ·  /leta debug  ·  /leta leave <seconds>  ·  /leta da|en" },
-  da = { movedNew = "Flyttet til et andet lag", left = "%d af 10 skift tilbage denne time", wait = "Ingen skift tilbage: vent %s", fewLeft = "%d skift tilbage denne time.", blindSub = "Lag kan ikke skelnes på Forever", layer = "Lag", unknown = "Målret en NPC", swap = "Skift", stop = "Stop", back = "Tilbage til %s", seen = "Lag her", goingTo = "Leder efter %s",
-    needNpc = "Målret eller hold musen over en NPC først, så dit lag er kendt.", inGroup = "Du er i en gruppe. Forlad den for at skifte lag.",
-    inInstance = "Ingen lag herinde. Skift lag virker ude i verden.", pressEnter = "Tryk Enter for at sende din anmodning", sent = "Spørger, venter på en invitation", joinChan = "Gå ind i layer-kanalen først: skriv /join layer",
-    asking = "Spørger %d spillere", heard = "Venter, %d har hørt", nobody = "Fandt ingen at spørge. Prøv igen om lidt.", noSearch = "Spillerssøgningen virker ikke på denne klient.", asked = "Spurgte %d spillere",
-    askedAll = "Alle her er allerede spurgt. Klik igen for at spørge flere.", noAnswer = "Ingen host svarede. Prøv igen om lidt.",
-    invited = "Inviteret af %s", joined = "Joinet, venter på skiftet", moved = "Flyttet til %s", leaving = "Forlader om %ds",
-    notMoved = "%s er på dit lag. Forlod gruppen.", refused = "Spillet afviste skiftet: dine 10 skift denne time kan være brugt. Prøv igen senere.", combat = "Ikke i kamp. Prøv igen om et par sekunder.", whoFail = "Søgningen startede ikke. Prøv igen om lidt.",
-    stopped = "Stoppet", hint = "Klik: åbn eller luk  ·  Træk: flyt", acceptHint = "Acceptér invitationen fra %s", locked = "Vinduet er låst", unlocked = "Vinduet er låst op",
-    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta lock  ·  /leta debug  ·  /leta leave <sekunder>  ·  /leta da|en" },
+local cfg   -- saved settings (LayerETADB)
+local paint -- redraws the box, set further down
+
+-- ===================================================================================== text ==
+local TEXT = {
+  en = {
+    title = "LayerETA", swap = "Swap", stop = "Stop", waitBtn = "Wait %s",
+    quota = "%d of 10 swaps left this hour", quotaLow = "Only %d swaps left this hour.",
+    hostOn = "Host for others: on", hostOff = "Host for others: off", hostCount = "Host: on, %d invited",
+    looking = "Looking for a host", lookingN = "Looking for a host (%d hosts online)", invitedBy = "Invited by %s",
+    acceptIt = "Accept the invite from %s", inGroupWait = "In %s's group, waiting for the move",
+    moved = "Moved to another layer", leavingIn = "Moved. Leaving the group in %ds",
+    sameLayer = "%s is on your layer. Left the group.", refused = "The game did not move you. Your 10 swaps this hour may be used.",
+    noHost = "No host answered. Try again in a little while.", stopped = "Stopped",
+    notHere = "Swapping works in the open world, not in here.", grouped = "Leave your group first.",
+    fighting = "Not during combat. Try again in a few seconds.", spent = "No swaps left this hour. Wait %s.",
+    noRoute = "No way to ask: the LayerETA channel is not ready and you are not in the layer channel (/join layer).",
+    hint = "Click: open or close  ·  Drag: move", locked = "Box locked", unlocked = "Box unlocked",
+    hostNowOn = "You now invite LayerETA users in your zone who want another layer.", hostNowOff = "You no longer host.",
+    chanOn = "Swap also writes \"inv\" in the layer channel.", chanOff = "Swap no longer writes in the layer channel.",
+    help = "/leta: show or hide  ·  /leta swap  ·  /leta host  ·  /leta channel  ·  /leta lock  ·  /leta leave <seconds>  ·  /leta debug  ·  /leta da|en",
+  },
+  da = {
+    title = "LayerETA", swap = "Skift", stop = "Stop", waitBtn = "Vent %s",
+    quota = "%d af 10 skift tilbage denne time", quotaLow = "Kun %d skift tilbage denne time.",
+    hostOn = "Host for andre: til", hostOff = "Host for andre: fra", hostCount = "Host: til, %d inviteret",
+    looking = "Leder efter en host", lookingN = "Leder efter en host (%d hosts online)", invitedBy = "Inviteret af %s",
+    acceptIt = "Acceptér invitationen fra %s", inGroupWait = "I %s's gruppe, venter på skiftet",
+    moved = "Flyttet til et andet lag", leavingIn = "Flyttet. Forlader gruppen om %ds",
+    sameLayer = "%s er på dit lag. Forlod gruppen.", refused = "Spillet flyttede dig ikke. Dine 10 skift denne time kan være brugt.",
+    noHost = "Ingen host svarede. Prøv igen om lidt.", stopped = "Stoppet",
+    notHere = "Skift virker ude i verden, ikke herinde.", grouped = "Forlad din gruppe først.",
+    fighting = "Ikke i kamp. Prøv igen om et par sekunder.", spent = "Ingen skift tilbage denne time. Vent %s.",
+    noRoute = "Kan ikke spørge: LayerETA kanalen er ikke klar, og du er ikke i layer kanalen (/join layer).",
+    hint = "Klik: åbn eller luk  ·  Træk: flyt", locked = "Boksen er låst", unlocked = "Boksen er låst op",
+    hostNowOn = "Du inviterer nu LayerETA brugere i din zone, der vil skifte lag.", hostNowOff = "Du hoster ikke længere.",
+    chanOn = "Skift skriver også \"inv\" i layer kanalen.", chanOff = "Skift skriver ikke længere i layer kanalen.",
+    help = "/leta: vis eller skjul  ·  /leta swap  ·  /leta host  ·  /leta channel  ·  /leta lock  ·  /leta leave <sekunder>  ·  /leta debug  ·  /leta da|en",
+  },
 }
-local function T(k) return (LOC[(DB and DB.lang) or "en"] or LOC.en)[k] end
+local function L(key, ...)
+  local pack = TEXT[cfg and cfg.lang or "en"] or TEXT.en
+  local s = pack[key] or TEXT.en[key] or key
+  if select("#", ...) > 0 then return string.format(s, ...) end
+  return s
+end
+local function say(msg) print("|cffffd24aLayerETA|r: " .. msg) end
 
-local defaults = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1 }
+local DEFAULTS = { lang = "en", open = false, hidden = false, locked = false, leaveDelay = 4, scale = 1, host = false, channel = true }
 
--- Forever skjuler nogle vaerdier for addons ("secret values"): dem roerer vi ikke
-local function secret(v) return type(issecretvalue) == "function" and issecretvalue(v) or false end
-local function str(v) return not secret(v) and type(v) == "string" and v ~= "" end
-local function short(name) return str(name) and (string.match(name, "^([^%-]+)") or name) or nil end
+-- ================================================================================== helpers ==
+-- Forever hands some values to addons as "secret": we never read those.
+local function hidden(v) return type(issecretvalue) == "function" and issecretvalue(v) or false end
+local function text(v) return not hidden(v) and type(v) == "string" and v ~= "" end
+local function bare(name) return text(name) and (name:match("^([^%-]+)") or name) or nil end
+local function call(fn, ...) if type(fn) ~= "function" then return false end return pcall(fn, ...) end
 
--- ---------- zone og lag ----------
-local ZONE_TYPE = (Enum and Enum.UIMapType and Enum.UIMapType.Zone) or 3
-local function zoneMap()  -- zonens map id (ens for alle klienter); en hule eller bygning taeller som zonen
-  if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetMapInfo) then return nil end
+local function myName() local ok, n = call(UnitName, "player"); return ok and text(n) and n or nil end
+local function inInstance() local ok, yes = call(IsInInstance); return ok and yes == true end
+local function inGroup() local ok, yes = call(IsInGroup); return ok and yes == true end
+local function inCombat() local ok, yes = call(InCombatLockdown); return ok and yes == true end
+
+-- the zone the player is in, as a map id (the same number on every client). A cave or a house
+-- inside a zone counts as that zone, so two players in the same zone always agree.
+local function zoneId()
+  if not (C_Map and C_Map.GetBestMapForUnit) then return nil end
   local ok, id = pcall(C_Map.GetBestMapForUnit, "player")
-  if not ok or secret(id) or type(id) ~= "number" then return nil end
-  for _ = 1, 6 do
-    local okI, info = pcall(C_Map.GetMapInfo, id)
-    if not okI or type(info) ~= "table" then return id end
-    if info.mapType == ZONE_TYPE or not info.parentMapID or info.parentMapID == 0 then return id end
-    if (info.mapType or 0) < ZONE_TYPE then return id end
-    id = info.parentMapID
+  if not ok or hidden(id) or type(id) ~= "number" then return nil end
+  local zoneType = (Enum and Enum.UIMapType and Enum.UIMapType.Zone) or 3
+  local steps = 0
+  while steps < 8 do
+    steps = steps + 1
+    local okInfo, info = pcall(C_Map.GetMapInfo, id)
+    if not okInfo or type(info) ~= "table" then break end
+    local kind, up = info.mapType or 0, info.parentMapID or 0
+    if kind <= zoneType or up == 0 then break end
+    id = up
   end
   return id
 end
-local function mapPos(zone)
-  if not (zone and C_Map and C_Map.GetPlayerMapPosition) then return nil end
-  local ok, pos = pcall(C_Map.GetPlayerMapPosition, zone, "player")
-  if not ok or secret(pos) or type(pos) ~= "table" then return nil end
-  local x, y = pos.x, pos.y
-  if type(pos.GetXY) == "function" then local okX, a, b = pcall(pos.GetXY, pos); if okX then x, y = a, b end end
-  if type(x) == "number" and type(y) == "number" and x > 0 and y > 0 then return x, y end
-end
 
-local lastShard    -- when the game last said it moved us (SHARD_TRANSFER)
-local blind = true -- the game hides which layer you are on (Forever since 20 Nov 2026)
-local combatEnd
-local target       -- laget du vil tilbage til, naar du klikker en linje i listen
-local cur          -- {id = "6843-8", key = "6843", at = tid}
-local swap         -- det igangvaerende skift
-local refresh
--- Lag faar et bogstav i den raekkefoelge, du ser dem i en zone (A, B, C ...). Det er kun dit eget navn for
--- laget: andre addons bruger deres egne bogstaver, saa server-nummeret vises ved siden af.
-local function letter(key)
-  if not (DB and key) then return "?" end
-  local zone = tostring(zoneMap() or 0)
-  DB.letters = DB.letters or {}
-  local z = DB.letters[zone]
-  if not z or (z.day ~= date("%j")) then z = { n = 0, day = date("%j"), k = {} }; DB.letters[zone] = z end  -- nye bogstaver hver dag
-  if not z.k[key] then z.n = z.n + 1; z.k[key] = z.n end
-  local n = z.k[key]
-  return n <= 26 and string.char(64 + n) or tostring(n)
-end
--- historik: de lag du har vaeret paa i denne zone, med klokkeslet for skiftet
-local HIST_MAX = 6
-local function noteLeft(key, id)   -- kaldes naar du forlader et lag: det er dét lag, der kommer paa listen
-  if not (DB and key) then return end
-  local zone = tostring(zoneMap() or 0)
-  DB.hist = DB.hist or {}
-  local h = DB.hist[zone]
-  if type(h) ~= "table" then h = {}; DB.hist[zone] = h end
-  for i = #h, 1, -1 do if type(h[i]) ~= "table" or h[i].key == key then table.remove(h, i) end end
-  table.insert(h, 1, { key = key, id = id, t = time() })   -- tidspunktet er, da du forlod laget
-  for i = #h, HIST_MAX + 1, -1 do h[i] = nil end
-end
-local function histFor()
-  if not DB then return {} end
-  local z = DB.hist and DB.hist[tostring(zoneMap() or 0)]
-  return type(z) == "table" and z or {}
-end
-
-local function histId(key)   -- hele id'et ("6843-1753") for et lag i listen, som LayerSwap's "want" skal bruge
-  for _, item in ipairs(histFor()) do
-    if type(item) == "table" and item.key == key and type(item.id) == "string" then return item.id end
+-- ================================================================== ten moves an hour ==
+-- Forever moves a character to another layer at most ten times in an hour. Each move is stored
+-- with its time, per character, so the count survives a reload.
+local Quota = { LIMIT = 10, WINDOW = 3600 }
+function Quota.list()
+  cfg.moveLog = cfg.moveLog or {}
+  local who = myName() or "?"
+  local now, fresh = time(), {}
+  for _, at in ipairs(cfg.moveLog[who] or {}) do
+    if type(at) == "number" and now - at < Quota.WINDOW then fresh[#fresh + 1] = at end
   end
+  cfg.moveLog[who] = fresh
+  return fresh
 end
-
-local function layerKey(id) return type(id) == "string" and (string.match(id, "^(%d+)%-") or id) or nil end
-
-local function setStatus(text, secs)
-  DB._status, DB._statusUntil = text, secs and (GetTime() + secs) or nil
-  if refresh then refresh() end
-end
-
-local onMoved
-local swapsLeft, waitText
-local function observe(unit)
-  if not UnitGUID then return end
-  local ok, guid = pcall(UnitGUID, unit)
-  if not ok or not str(guid) then return end
-  -- Forever, since the hotfix of 20 November 2026: the realm field of every GUID is scrambled (another
-  -- number on two creatures side by side), so no creature tells which layer you are on. LayerETA reads none
-  -- and names no layer in a request: a host that cannot read its own layer skips a request that names one.
-  if blind then return end
-  local kind, _, server, _, zoneUID = strsplit("-", guid)
-  if (kind ~= "Creature" and kind ~= "Vehicle") or not server or not zoneUID then return end
-  if type(UnitPlayerControlled) == "function" then  -- totems og pets baerer id'et fra det sted, de blev lavet
-    local okP, pc = pcall(UnitPlayerControlled, unit)
-    if okP and not secret(pc) and pc == true then return end
-  end
-  local id = server .. "-" .. zoneUID
-  local key = layerKey(id)
-  local old, oldId = cur and cur.key, cur and cur.id
-  cur = { id = id, key = key, at = GetTime() }
-  if old ~= key then
-    if old then noteLeft(old, oldId) end
-    if swap and swap.joinedAt and swap.fromKey and key ~= swap.fromKey then onMoved() end
-    refresh()
-  end
-end
-
--- ---------- ten moves an hour ----------
--- The game moves a character to another layer at most ten times an hour on Forever. LayerETA counts
--- the moves of each character (also across a login), and once they are used up the button waits.
-local HOUR, PER_HOUR = 3600, 10
-local function charKey()
-  local n, r = UnitName and UnitName("player"), GetRealmName and GetRealmName()
-  return (str(n) and n or "?") .. "-" .. (str(r) and r or "")
-end
-local function moves()
-  DB.moves = DB.moves or {}
-  local list = DB.moves[charKey()] or {}
-  local now, keep = time(), {}
-  for _, t in ipairs(list) do if now - t < HOUR then keep[#keep + 1] = t end end
-  DB.moves[charKey()] = keep
-  return keep
-end
-swapsLeft = function() return math.max(0, PER_HOUR - #moves()) end
-waitText = function()
-  local list = moves()
-  if #list < PER_HOUR then return "0:00" end
-  local secs = math.max(0, HOUR - (time() - list[1]))
+function Quota.left() return math.max(0, Quota.LIMIT - #Quota.list()) end
+function Quota.untilNext()
+  local log = Quota.list()
+  if #log < Quota.LIMIT then return "0:00" end
+  local secs = math.max(0, Quota.WINDOW - (time() - log[1]))
   return string.format("%d:%02d", math.floor(secs / 60), secs % 60)
 end
-local function noteMove()
-  local list = moves()
-  list[#list + 1] = time()
-  local left = swapsLeft()
-  if left == 3 then print("|cffffd24aLayerETA|r: " .. string.format(T("fewLeft"), left)) end
+function Quota.add()
+  local log = Quota.list()
+  log[#log + 1] = time()
+  local left = Quota.left()
+  if left == 3 or left == 1 then say(L("quotaLow", left)) end
 end
 
--- ---------- huskeliste: hvem er spurgt, og hvem er hosts ----------
-local function prune()
-  local now = time()
-  for n, e in pairs(DB.book) do if type(e) ~= "table" or now - (e.at or 0) > BOOK_TTL then DB.book[n] = nil end end
+-- ======================================================================= network ==
+-- LayerETA's own channel and message format. Every message is one line:
+--   "1;ask;<ticket>;<zone>;<name,name,...>"  a player wants another layer. The names are hosts
+--                                             that recently turned out to share its layer.
+--   "1;took;<ticket>"                         the asker accepted an invite, other hosts stand down.
+--   "1;here"                                  a host says it is online (answer to "1;who").
+--   "1;who"                                   who hosts right now? (sent with an ask, answered by hosts)
+local Net = { TAG = "LETA", CHANNEL = "LayerETAnet", VERSION = "1" }
+
+function Net.channelId()
+  local ok, id = call(GetChannelName, Net.CHANNEL)
+  if ok and type(id) == "number" and id > 0 then return id end
 end
 
--- ---------- gruppen ----------
--- how the game marks the host in your group: "apart" (another layer), "here" (no mark), nil when it does not say
-local function hostMark(name)
-  if type(UnitPhaseReason) ~= "function" or not str(name) then return nil end
+function Net.join()
+  if Net.channelId() then Net.tidy(); return end
+  call(JoinTemporaryChannel, Net.CHANNEL)
+  if C_Timer then C_Timer.After(2, Net.tidy) end
+end
+
+-- the channel carries only addon messages: keep it out of every chat window
+function Net.tidy()
+  if type(ChatFrame_RemoveChannel) ~= "function" then return end
+  for i = 1, (NUM_CHAT_WINDOWS or 10) do
+    local frame = _G["ChatFrame" .. i]
+    if frame then pcall(ChatFrame_RemoveChannel, frame, Net.CHANNEL) end
+  end
+end
+
+function Net.ready()
+  return Net.channelId() ~= nil and C_ChatInfo and type(C_ChatInfo.SendAddonMessage) == "function"
+end
+
+function Net.post(...)
+  local id = Net.channelId()
+  if not id then return false end
+  local line = table.concat({ Net.VERSION, ... }, ";")
+  local ok = pcall(C_ChatInfo.SendAddonMessage, Net.TAG, line, "CHANNEL", id)
+  return ok
+end
+
+function Net.split(line)
+  local out = {}
+  for piece in string.gmatch(line .. ";", "([^;]*);") do out[#out + 1] = piece end
+  return out
+end
+
+-- ===================================================================== asking ==
+local Ask = { WINDOW = 45, CHECK_AFTER = 3, GIVE_UP = 12, COOLDOWN = 5, SAME_FOR = 900 }
+local job          -- the swap in progress, or nil
+local lastPress = -100
+local fightEndedAt = -100
+local hostsOnline, hostsSeenAt = {}, 0
+
+-- hosts that turned out to stand on our layer, remembered for a while
+local function sameLayerHosts()
+  cfg.sameAs = cfg.sameAs or {}
+  local now, names = time(), {}
+  for who, at in pairs(cfg.sameAs) do
+    if type(at) ~= "number" or now - at > Ask.SAME_FOR then cfg.sameAs[who] = nil else names[#names + 1] = who end
+  end
+  return names
+end
+
+local function note(msg, secs)
+  cfg._note, cfg._noteUntil = msg, GetTime() + (secs or 10)
+  if paint then paint() end
+end
+
+local function finish(msg, secs)
+  job = nil
+  note(msg, secs)
+end
+
+local function quitGroup()
+  if not inGroup() then return end
+  if C_PartyInfo and C_PartyInfo.LeaveParty then pcall(C_PartyInfo.LeaveParty) else call(LeaveParty) end
+end
+
+-- the layer channel players type "inv" in; nil when the player has not joined it
+local function layerChannel()
+  local ok, id = call(GetChannelName, "layer")
+  if ok and type(id) == "number" and id > 0 then return id end
+end
+
+local function countHosts()
+  local n, now = 0, GetTime()
+  for _, at in pairs(hostsOnline) do if now - at < 120 then n = n + 1 end end
+  return n
+end
+
+local function startSwap()
+  local now = GetTime()
+  if job then finish(L("stopped"), 5); return end
+  if now - lastPress < Ask.COOLDOWN then return end
+  if inInstance() then note(L("notHere"), 8); return end
+  if inGroup() then note(L("grouped"), 8); return end
+  if inCombat() or now - fightEndedAt < 6 then note(L("fighting"), 6); return end
+  if Quota.left() == 0 then note(L("spent", Quota.untilNext()), 8); return end
+
+  local useNet = Net.ready()
+  local chan = cfg.channel and layerChannel() or nil
+  if not useNet and not chan then note(L("noRoute"), 12); return end
+  lastPress = now
+
+  local ticket = string.format("%05d%04d", time() % 100000, math.random(0, 9999))
+  if useNet then
+    Net.post("who")
+    Net.post("ask", ticket, tostring(zoneId() or 0), table.concat(sameLayerHosts(), ","))
+  end
+  -- a button click counts as a key press, so the game lets us say "inv" in a channel here
+  if chan and type(SendChatMessage) == "function" then pcall(SendChatMessage, "inv", "CHANNEL", nil, chan) end
+
+  local mine = { ticket = ticket, startedAt = now }
+  job = mine
+  paint()
+  C_Timer.After(Ask.WINDOW, function()
+    if job == mine and not mine.host then finish(L("noHost"), 10) end
+  end)
+end
+
+local function onInvite(from)
+  local j = job
+  if not j or j.host or GetTime() - j.startedAt > Ask.WINDOW then return end  -- only invites we asked for
+  j.host = text(from) and from or "?"
+  Net.post("took", j.ticket)
+  if call(AcceptGroup) then
+    call(StaticPopup_Hide, "PARTY_INVITE")
+  else
+    j.manual = true
+  end
+  paint()
+end
+
+local function onJoined()
+  local j = job
+  if j and j.host and not j.inGroupAt and inGroup() then
+    j.inGroupAt, j.manual = GetTime(), nil
+    paint()
+  end
+end
+
+local function onMoved()
+  local j = job
+  if not j or not j.inGroupAt or j.movedAt then return end
+  j.movedAt = GetTime()
+  Quota.add()
+  paint()
+end
+
+-- after the join: how does the game mark the host? 1 = elsewhere (another layer), nil = beside us
+local function hostPlacement(who)
+  if type(UnitPhaseReason) ~= "function" or not text(who) then return nil end
   for i = 1, 4 do
     local unit = "party" .. i
-    local okE, there = pcall(UnitExists, unit)
-    if okE and there == true then
-      local okN, n = pcall(UnitName, unit)
-      if okN and str(n) and (n == short(name) or n == name) then
-        local ok, r = pcall(UnitPhaseReason, unit)
-        if not ok or secret(r) then return nil end
-        if r == nil then return "here" end
-        return r == 1 and "apart" or nil
-      end
+    local okName, n = call(UnitName, unit)
+    if okName and text(n) and (n == who or n == bare(who)) then
+      local ok, reason = pcall(UnitPhaseReason, unit)
+      if not ok or hidden(reason) then return nil end
+      if reason == nil then return "same" end
+      if reason == 1 then return "other" end
+      return nil
     end
   end
-  return nil
-end
-local function leaveGroup()
-  local leave = (C_PartyInfo and C_PartyInfo.LeaveParty) or LeaveParty
-  if leave and IsInGroup and IsInGroup() then pcall(leave) end
 end
 
-local function endSwap(text, secs)
-  swap = nil
-  if Who and Who.pending then Who.pending = nil end
-  setStatus(text, secs or 12)
-end
-
-onMoved = function()
-  if not swap or swap.moved then return end
-  noteMove()
-  if target and cur and cur.key ~= target then
-    -- flyttet, men ikke til det lag du ville tilbage til: bliv staaende og lad brugeren klikke igen
-    swap.moved = true
-    swap.leaveAt = GetTime() + math.max(0, DB.leaveDelay or 4)
-    refresh()
+local function stepJob(now)
+  local j = job
+  if not j or not j.inGroupAt then return end
+  if j.movedAt then
+    local leaveAt = j.movedAt + math.max(0, cfg.leaveDelay or 4)
+    if now >= leaveAt then job = nil; quitGroup(); note(L("moved"), 15) end
     return
   end
-  if target and cur and cur.key == target then target = nil end
-  swap.moved = true
-  local delay = math.max(0, DB.leaveDelay or 4)
-  swap.leaveAt = GetTime() + delay
-  refresh()
+  local waited = now - j.inGroupAt
+  if waited < Ask.CHECK_AFTER then return end
+  local where = hostPlacement(j.host)
+  local who = bare(j.host) or "?"
+  if where == "same" or waited > Ask.GIVE_UP then
+    cfg.sameAs = cfg.sameAs or {}
+    cfg.sameAs[who] = time()
+    job = nil; quitGroup(); note(L("sameLayer", who), 15)
+  elseif where == "other" then
+    job = nil; quitGroup(); note(L("refused"), 20)
+  end
 end
 
+-- ===================================================================== hosting ==
+-- With "Host for others" on, LayerETA invites askers in your zone. Only while you are alone, out of
+-- combat and out of instances, at most HOST_MAX invites per HOST_WINDOW, and never twice per ticket.
+local Host = { MAX = 5, WINDOW = 600, STAY = 40 }
+local tickets = {}       -- [ticket] = "seen" or "took"
+local guestAt            -- when our last guest was invited
 
--- ---------- soegningen: find spillerne i zonen, og hvisk anmodningen til dem ----------
--- Saadan goer LayerSwap paa Forever: den skriver ikke i layer-kanalen, men laver en who-soegning
--- efter spillerne i din zone og sender anmodningen som en skjult addon-besked til hver af dem.
--- Spillets egen who-liste (group finder) aabner sig selv, naar et svar kommer ind, saa den bliver
--- koblet fra imens og koblet til igen bagefter. Du ser den aldrig.
-local Who = { WAIT = 6, BURST = 8, BURST_WAIT = 1, ROUNDS = 25, MAX = 49, LATE = 30, sentTo = {}, muted = {} }
-Who.LISTS = { "LFGWhoListFrame", "FriendsFrame", "WhoFrame" }
-Who.CLASSES = { 1, 2, 3, 4, 5, 7, 8, 9, 11 }
-
-local function zoneName(map)
-  if not (map and C_Map and C_Map.GetMapInfo) then return nil end
-  local ok, info = pcall(C_Map.GetMapInfo, map)
-  local name = ok and type(info) == "table" and info.name
-  return str(name) and name or nil
+function Host.recent()
+  cfg.hostLog = cfg.hostLog or {}
+  local now, keep = time(), {}
+  for _, at in ipairs(cfg.hostLog) do if type(at) == "number" and now - at < Host.WINDOW then keep[#keep + 1] = at end end
+  cfg.hostLog = keep
+  return keep
 end
 
-local function me()
-  local n = UnitName and UnitName("player")
-  return str(n) and n or nil
+function Host.able()
+  return cfg.host and not inGroup() and not inInstance() and not inCombat() and #Host.recent() < Host.MAX
 end
 
-function Who.ready()
-  local f = C_FriendList
-  return type(f) == "table" and type(f.SendWho) == "function" and type(f.GetNumWhoResults) == "function"
-    and type(f.GetWhoInfo) == "function" and C_ChatInfo ~= nil and type(C_ChatInfo.SendAddonMessage) == "function"
-end
-
-function Who.hush()   -- tag WHO_LIST_UPDATE fra spillets egne lister, saa de ikke popper op
-  for _, name in ipairs(Who.LISTS) do
-    local fr = _G[name]
-    if type(fr) == "table" and not Who.muted[name] and type(fr.IsEventRegistered) == "function" then
-      local okR, reg = pcall(fr.IsEventRegistered, fr, "WHO_LIST_UPDATE")
-      local okV, seen = pcall(fr.IsVisible, fr)
-      -- har du selv listen aabne, roerer vi den ikke
-      if okR and reg == true and okV and seen ~= true and pcall(fr.UnregisterEvent, fr, "WHO_LIST_UPDATE") then
-        Who.muted[name] = fr
-      end
+function Host.onAsk(sender, ticket, zone, skip)
+  if not Host.able() or tickets[ticket] then return end
+  tickets[ticket] = "seen"
+  if tostring(zoneId() or -1) ~= zone then return end
+  local me = myName()
+  for who in string.gmatch(skip or "", "[^,]+") do if who == me then return end end
+  -- several hosts may hear the same ask: each waits a short random moment, the first one invites
+  -- and the asker's "took" makes the rest stand down
+  C_Timer.After(0.3 + math.random() * 1.7, function()
+    if tickets[ticket] == "took" or not Host.able() then return end
+    local invite = (C_PartyInfo and C_PartyInfo.InviteUnit) or InviteUnit
+    if call(invite, sender) then
+      tickets[ticket] = "took"
+      local log = Host.recent()
+      log[#log + 1] = time()
+      guestAt = GetTime()
+      if paint then paint() end
     end
-  end
-end
-
-function Who.release(p)
-  if p and Who.flight ~= p then return end
-  Who.flight = nil
-  for name, fr in pairs(Who.muted) do pcall(fr.RegisterEvent, fr, "WHO_LIST_UPDATE"); Who.muted[name] = nil end
-  if C_FriendList and type(C_FriendList.SetWhoToUi) == "function" then
-    for _, name in ipairs(Who.LISTS) do   -- har du selv en liste aabne, skal svarene blive der
-      local fr = _G[name]
-      if type(fr) == "table" and type(fr.IsVisible) == "function" and select(2, pcall(fr.IsVisible, fr)) == true then return end
-    end
-    pcall(C_FriendList.SetWhoToUi, false)
-  end
-end
-
-function Who.ask(line)
-  if not Who.ready() then return false end
-  local map = zoneMap()
-  local zname = zoneName(map)
-  local now = GetTime()
-  for name, at in pairs(Who.sentTo) do if now - at > 60 then Who.sentTo[name] = nil end end
-  local p = { line = line, at = now, zone = zname, sent = 0, rounds = 0, queue = {} }
-  Who.pending, Who.flight = p, p
-  Who.hush()
-  if type(C_FriendList.SetWhoToUi) == "function" then pcall(C_FriendList.SetWhoToUi, true) end
-  local origin = (Enum and Enum.SocialWhoOrigin and Enum.SocialWhoOrigin.Social) or 1
-  local text = zname and ((str(WHO_TAG_ZONE) and WHO_TAG_ZONE or "z-") .. '"' .. zname .. '"') or ""
-  local ok = false
-  if map and not Who.noMap then
-    Who.round = ((Who.round or -1) + 1) % (#Who.CLASSES + 1)
-    local cls = Who.round > 0 and Who.CLASSES[Who.round] or nil
-    ok = pcall(C_FriendList.SendWho, text, origin, { classIDs = cls and { cls } or {}, raceIDs = {}, uiMapIDs = { map } })
-    if not ok then Who.noMap = true end   -- klienten tager ikke kort-filteret: zonens navn alene herefter
-  end
-  if not ok then ok = pcall(C_FriendList.SendWho, text, origin) end
-  if not ok then Who.pending = nil; Who.release(p); return false end
-  if C_Timer and C_Timer.After then C_Timer.After(Who.LATE, function() Who.release(p) end) end
-  return true
-end
-
-function Who.send(p)   -- en byge hvisk ad gangen: klienten spaerrer, hvis vi sender for mange paa en gang
-  if Who.pending ~= p then return end
-  -- er du allerede inviteret, stopper vi. Ellers inviterer de naeste hosts forgaeves.
-  if not swap or swap.inviter then Who.pending = nil; return end
-  p.rounds = p.rounds + 1
-  local n = 0
-  while #p.queue > 0 and n < Who.BURST do
-    local name = p.queue[1]
-    local ok, res = pcall(C_ChatInfo.SendAddonMessage, PREFIX, p.line, "WHISPER", name)
-    if ok and not secret(res) and res == 3 then break end   -- 3: for hurtigt, navnet venter til naeste runde
-    table.remove(p.queue, 1)
-    n = n + 1
-    if ok and not secret(res) and res == 0 then
-      p.sent = p.sent + 1
-      Who.sentTo[name] = GetTime()
-      if swap then swap.asked = p.sent end
-    end
-  end
-  if swap then refresh() end
-  if #p.queue > 0 and p.rounds < Who.ROUNDS and C_Timer and C_Timer.After then
-    C_Timer.After(Who.BURST_WAIT, function() Who.send(p) end)
-  else
-    Who.pending = nil
-  end
-end
-
-function Who.results()
-  local p = Who.pending
-  if not p or p.names then Who.release(Who.flight); return end
-  local okN, n = pcall(C_FriendList.GetNumWhoResults)
-  if not okN or secret(n) or type(n) ~= "number" then n = 0 end
-  local mine, here, far, seen = me(), {}, {}, {}
-  for i = 1, math.min(n, Who.MAX) do
-    local ok, info = pcall(C_FriendList.GetWhoInfo, i)
-    local name = (ok and type(info) == "table" and not secret(info)) and info.fullName or nil
-    if str(name) and not seen[name] then
-      seen[name] = true
-      if short(name) ~= mine and name ~= mine and not Who.sentTo[name] then
-        local area = type(info) == "table" and info.area
-        if p.zone and str(area) and area == p.zone then here[#here + 1] = name else far[#far + 1] = name end
-      end
-    end
-  end
-  Who.release(p)
-  p.names = true
-  -- kendte hosts foerst, saa dem i din egen zone, saa resten
-  local book, rest = {}, {}
-  for _, name in ipairs(here) do
-    if DB.book and DB.book[short(name) or ""] then book[#book + 1] = name else rest[#rest + 1] = name end
-  end
-  for _, name in ipairs(book) do p.queue[#p.queue + 1] = name end
-  for _, name in ipairs(rest) do p.queue[#p.queue + 1] = name end
-  for _, name in ipairs(far) do p.queue[#p.queue + 1] = name end
-  if #p.queue == 0 then Who.pending = nil; if swap then setStatus(T("nobody"), 8) end; return end
-  Who.send(p)
-end
-
--- ---------- klik: skift lag ----------
--- LayerETA sender aldrig selv noget til andre spillere. Knappen laegger anmodningen i din chatboks,
--- rettet mod layer-kanalen, og du sender den selv med Enter (eller dropper den med Escape).
-local lastClick = -100
-local function requestSwap()
-  local now = GetTime()
-  if swap then endSwap(T("stopped"), 5); return end  -- samme knap stopper
-  if now - lastClick < COOLDOWN then return end
-  if IsInInstance and select(1, IsInInstance()) then setStatus(T("inInstance"), 8); return end
-  if IsInGroup and IsInGroup() then setStatus(T("inGroup"), 8); return end
-  if (InCombatLockdown and InCombatLockdown()) or GetTime() - (combatEnd or -100) < 6 then setStatus(T("combat"), 6); return end
-  if swapsLeft() <= 0 then setStatus(string.format(T("wait"), waitText()), 8); return end
-  if not Who.ready() then setStatus(T("noSearch"), 10); return end
-  lastClick = now
-  local zone = zoneMap()
-  local parts = { "<LS" }
-  if zone then parts[#parts + 1] = tostring(zone) end
-  -- LayerSwap's eget format: "want <id>" beder om netop det lag, "not <id>" om alt andet end det.
-  -- Flere "not" betyder, at en host paa et af dem springer dig over, saa du ikke lander samme sted igen.
-  local want = (not blind) and target and histId(target) or nil
-  if want then
-    parts[#parts + 1] = "want " .. want
-  elseif cur and not blind then
-    parts[#parts + 1] = "not " .. cur.id
-  end
-  -- "r2": we keep the hour's limit and send nothing in combat, as LayerSwap 1.14.42+ marks its own requests
-  if zone then parts[#parts + 1] = "r2" end
-  local x, y = mapPos(zone)
-  if zone and x then parts[#parts + 1] = string.format("%.1f,%.1f", x * 100, y * 100) end
-  local line = "inv layer " .. table.concat(parts, " ") .. ">"
-
-  -- Intet gaar i layer-kanalen. Anmodningen sendes som en skjult addon-besked til de spillere,
-  -- soegningen finder i din zone, praecis som LayerSwap goer det.
-  if not Who.ask(line) then setStatus(T("noSearch"), 10); return end
-
-  local s = { at = now, zone = zone, fromKey = cur and cur.key, heard = 0 }
-  swap = s
-  refresh()
-  C_Timer.After(ASK_TTL, function()
-    if swap == s and not s.inviter then endSwap(T("noAnswer")) end
   end)
 end
 
--- ---------- svar fra hosts ----------
-local function onNote(text, sender)
-  if not str(text) or not str(sender) then return end
-  local name = short(sender)
-  if text == "same" then  -- en host paa vores eget lag
-    DB.book[name] = { at = time(), host = true }
-    if swap then swap.heard = swap.heard + 1; refresh() end
-  else
-    local _, layer, _, flag = string.match(text, "^heard ([^|]*)|([^|]*)|([^|]*)|([^|]*)")
-    if layer then
-      DB.book[name] = { at = time(), host = flag == "h" or nil, layer = layer ~= "-" and layer or nil }
-      if swap then swap.heard = swap.heard + 1; refresh() end
-    end
+-- a guest who stays too long: we leave, which ends the little group
+function Host.step(now)
+  if not guestAt then return end
+  if not inGroup() then
+    if now - guestAt > 30 then guestAt = nil end
+    return
+  end
+  if now - guestAt > Host.STAY then
+    local okN, size = call(GetNumGroupMembers)
+    if okN and type(size) == "number" and size <= 2 then quitGroup() end
+    guestAt = nil
   end
 end
 
-local function onInvite(name)
-  local s = swap
-  if not s or s.inviter or GetTime() - s.at > ASK_TTL + 30 then return end  -- kun invites vi selv har bedt om
-  s.inviter = str(name) and name or "?"
-  Who.pending = nil   -- stop de resterende hvisk: en host har taget den
-  if str(name) then DB.book[short(name)] = { at = time(), host = true } end
-  -- acceptér selv; kan klienten ikke det, beder vi dig trykke
-  local ok = AcceptGroup and pcall(AcceptGroup)
-  if ok then
-    if StaticPopup_Hide then pcall(StaticPopup_Hide, "PARTY_INVITE") end
-  else
-    s.manual = true
+function Host.onMessage(parts, sender)
+  local kind = parts[2]
+  if kind == "ask" and parts[3] and parts[4] then
+    Host.onAsk(sender, parts[3], parts[4], parts[5])
+  elseif kind == "took" and parts[3] then
+    tickets[parts[3]] = "took"
+  elseif kind == "who" then
+    if cfg.host and GetTime() - hostsSeenAt > 5 then hostsSeenAt = GetTime(); Net.post("here") end
+  elseif kind == "here" then
+    hostsOnline[sender] = GetTime()
+    if job and paint then paint() end
   end
-  refresh()
 end
 
--- ---------- vindue ----------
-local function fs(parent, font, size)
-  local t = parent:CreateFontString(nil, "OVERLAY")
-  t:SetFont(font, size, ""); t:SetShadowOffset(1, -1); t:SetShadowColor(0, 0, 0, 0.6)
-  return t
+-- ========================================================================= box ==
+local WIDTH = 160
+local box = CreateFrame("Frame", "LayerETAFrame", UIParent)
+box:SetSize(WIDTH, 40)
+box:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -220, -520)
+box:SetMovable(true); box:EnableMouse(true); box:SetClampedToScreen(true); box:RegisterForDrag("LeftButton")
+
+local function label(parent, font, size, r, g, b)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  fs:SetFont(font, size, "")
+  fs:SetShadowOffset(1, -1); fs:SetShadowColor(0, 0, 0, 0.6)
+  if r then fs:SetTextColor(r, g, b) end
+  return fs
 end
-local W = 150  -- samme bredde lukket og aaben; vinduet folder kun ud nedad
-local f = CreateFrame("Frame", "LayerETAFrame", UIParent)
-f:SetSize(W, 40); f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -220, -520)
-f:SetMovable(true); f:EnableMouse(true); f:SetClampedToScreen(true); f:RegisterForDrag("LeftButton")
-if f.SetToplevel then f:SetToplevel(true) end
-f:SetScript("OnDragStart", function(self) self._drag = true; if not DB.locked then self:StartMoving() end end)
-f:SetScript("OnMouseUp", function(self, button)  -- klik folder ud, klik igen folder sammen
-  if self._drag then self._drag = nil; return end
-  if button == "LeftButton" and DB then DB.open = not DB.open; refresh() end
-end)
-f:SetScript("OnEnter", function(self)
-  GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine("LayerETA", 1, 0.82, 0.3)
-  GameTooltip:AddLine(T("hint"), 0.6, 0.6, 0.6); GameTooltip:Show()
-end)
-f:SetScript("OnLeave", function() GameTooltip:Hide() end)
-f:SetScript("OnDragStop", function(self)
-  self:StopMovingOrSizing()
-  local l, t = self:GetLeft(), self:GetTop()
-  if l and t then self:ClearAllPoints(); self:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t); DB.point = { l, t } end
-end)
-do
-  local function part(name, p1, p2)
-    local t = f:CreateTexture(nil, "BACKGROUND")
-    t:SetTexture(TEX .. name); t:SetTexCoord(0, 520 / 1024, 0, 40 / 64)
+
+do -- panel background in three slices, shared with the other ETA addons
+  local function slice(file)
+    local t = box:CreateTexture(nil, "BACKGROUND")
+    t:SetTexture(IMG .. file); t:SetTexCoord(0, 520 / 1024, 0, 40 / 64)
     return t
   end
-  local top = part("PanelTop"); top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(20)
-  local bot = part("PanelBottom"); bot:SetPoint("BOTTOMLEFT"); bot:SetPoint("BOTTOMRIGHT"); bot:SetHeight(20)
-  local mid = part("PanelMid"); mid:SetPoint("TOPLEFT", top, "BOTTOMLEFT"); mid:SetPoint("BOTTOMRIGHT", bot, "TOPRIGHT")
-end
--- toppen (altid synlig): logo, "Layer A" og en linje under
--- Mark er logoet uden ring: ringen aeder for meget ved denne stoerrelse
-local mIcon = f:CreateTexture(nil, "ARTWORK"); mIcon:SetSize(26, 26); mIcon:SetPoint("TOPLEFT", 8, -8); mIcon:SetTexture(TEX .. "Mark")
-local mTop = fs(f, F_BOLD, 12); mTop:SetPoint("TOPLEFT", 40, -8); mTop:SetTextColor(0.91, 0.92, 0.94)
-local mSub = fs(f, F_SEMI, 10); mSub:SetPoint("TOPLEFT", 40, -23); mSub:SetTextColor(0.55, 0.58, 0.64)
-mSub:SetWidth(W - 48); mSub:SetJustifyH("LEFT"); if mSub.SetWordWrap then mSub:SetWordWrap(false) end
-
--- det udfoldede: liste over lag i denne zone, status og en lille knap
-local sep = f:CreateTexture(nil, "ARTWORK"); sep:SetHeight(1); sep:SetColorTexture(1, 1, 1, 0.06)
-sep:SetPoint("TOPLEFT", 12, -40); sep:SetPoint("TOPRIGHT", -12, -40)
-local hLabel = fs(f, F_SEMI, 9); hLabel:SetPoint("TOPLEFT", 12, -46); hLabel:SetTextColor(0.42, 0.45, 0.52)
-
--- en linje pr lag: bogstavet til venstre, klokkeslettet til hoejre. Klik paa en linje leder efter det lag igen.
-local ROW_H, rows = 15, {}
-for i = 1, HIST_MAX do
-  local r = CreateFrame("Button", nil, f)
-  r:SetHeight(ROW_H); r:SetPoint("TOPLEFT", 10, -(58 + (i - 1) * ROW_H)); r:SetPoint("TOPRIGHT", -10, -(58 + (i - 1) * ROW_H))
-  local hl = r:CreateTexture(nil, "BACKGROUND"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.05); hl:Hide()
-  local lt = fs(r, F_BOLD, 11); lt:SetPoint("LEFT", 4, 0)
-  local tt = fs(r, F_SEMI, 10); tt:SetPoint("RIGHT", -2, 0); tt:SetTextColor(0.45, 0.48, 0.55)
-  r.hl, r.lt, r.tt = hl, lt, tt
-  r:SetScript("OnEnter", function(self) self.hl:Show() end)
-  r:SetScript("OnLeave", function(self) self.hl:Hide() end)
-  r:SetScript("OnClick", function(self)
-    if not self.key or (cur and self.key == cur.key) then return end
-    if target == self.key and not swap then target = nil; refresh(); return end
-    target = self.key
-    if swap then endSwap(nil, 1) end
-    requestSwap()
-  end)
-  rows[i] = r
+  local top, bottom, middle = slice("PanelTop"), slice("PanelBottom"), slice("PanelMid")
+  top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT"); top:SetHeight(20)
+  bottom:SetPoint("BOTTOMLEFT"); bottom:SetPoint("BOTTOMRIGHT"); bottom:SetHeight(20)
+  middle:SetPoint("TOPLEFT", top, "BOTTOMLEFT"); middle:SetPoint("BOTTOMRIGHT", bottom, "TOPRIGHT")
 end
 
-local status = fs(f, F_SEMI, 10); status:SetPoint("TOPLEFT", 12, -47); status:SetPoint("TOPRIGHT", -12, -47)
-status:SetJustifyH("LEFT"); status:SetTextColor(0.75, 0.78, 0.84)
-if status.SetWordWrap then status:SetWordWrap(true) end
+local mark = box:CreateTexture(nil, "ARTWORK")
+mark:SetSize(26, 26); mark:SetPoint("TOPLEFT", 8, -8); mark:SetTexture(IMG .. "Mark")
+local head = label(box, FONT_BOLD, 12, 0.91, 0.92, 0.94); head:SetPoint("TOPLEFT", 40, -8)
+local sub = label(box, FONT_SEMI, 10, 0.55, 0.58, 0.64); sub:SetPoint("TOPLEFT", 40, -23)
+sub:SetWidth(WIDTH - 48); sub:SetJustifyH("LEFT"); if sub.SetWordWrap then sub:SetWordWrap(false) end
 
--- knappen: en lille fyldt guld-pille med moerk tekst. Lysere under musen, trykkes lidt ned ved klik,
--- og bliver graa ("Stop"), mens et skift er i gang.
-local BTN_W = 86
-local btn = CreateFrame("Button", nil, f)
-btn:SetSize(BTN_W, 22); btn:SetPoint("BOTTOM", 0, 10)
-local bbg = btn:CreateTexture(nil, "BACKGROUND"); bbg:SetAllPoints(); bbg:SetTexture(TEX .. "Button"); bbg:SetTexCoord(0, 240 / 256, 0, 48 / 64)
-local btxt = btn:CreateFontString(nil, "OVERLAY"); btxt:SetFont(F_BOLD, 11, ""); btxt:SetPoint("CENTER")
-local function paintBtn()
-  local stop, over = btn.stop, btn.over
-  if stop then
-    bbg:SetVertexColor(over and 0.34 or 0.26, over and 0.36 or 0.28, over and 0.42 or 0.33)
-    btxt:SetTextColor(0.91, 0.92, 0.94); btxt:SetShadowOffset(1, -1); btxt:SetShadowColor(0, 0, 0, 0.6)
-  else
-    bbg:SetVertexColor(1, over and 0.88 or 0.8, over and 0.5 or 0.33)
-    btxt:SetTextColor(0.1, 0.08, 0.03); btxt:SetShadowOffset(0, 0)
-  end
-end
-btn:SetScript("OnEnter", function() btn.over = true; paintBtn() end)
-btn:SetScript("OnLeave", function() btn.over = false; paintBtn(); btxt:SetPoint("CENTER", 0, 0) end)
-btn:SetScript("OnMouseDown", function() btxt:SetPoint("CENTER", 0, -1) end)
-btn:SetScript("OnMouseUp", function() btxt:SetPoint("CENTER", 0, 0) end)
--- Venstreklik skifter, og har du valgt et lag i listen, er det dét lag, den beder om.
--- Hoejreklik glemmer det valgte lag, saa knappen beder om et hvilket som helst lag igen.
-btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-btn:SetScript("OnClick", function(_, button)
-  if button == "RightButton" then
-    if not swap then target = nil; refresh() end
-    return
-  end
-  requestSwap()
+local rule = box:CreateTexture(nil, "ARTWORK"); rule:SetHeight(1); rule:SetColorTexture(1, 1, 1, 0.06)
+rule:SetPoint("TOPLEFT", 12, -40); rule:SetPoint("TOPRIGHT", -12, -40)
+
+local info = label(box, FONT_SEMI, 10, 0.75, 0.78, 0.84)
+info:SetPoint("TOPLEFT", 12, -47); info:SetPoint("TOPRIGHT", -12, -47); info:SetJustifyH("LEFT")
+if info.SetWordWrap then info:SetWordWrap(true) end
+
+-- the host switch: a line of text you click
+local hostLine = CreateFrame("Button", nil, box)
+hostLine:SetHeight(14)
+local hostText = label(hostLine, FONT_SEMI, 10); hostText:SetPoint("LEFT", 0, 0)
+hostLine:SetScript("OnClick", function()
+  cfg.host = not cfg.host
+  say(cfg.host and L("hostNowOn") or L("hostNowOff"))
+  paint()
 end)
-paintBtn()
+hostLine:SetScript("OnEnter", function() hostText:SetAlpha(0.75) end)
+hostLine:SetScript("OnLeave", function() hostText:SetAlpha(1) end)
 
-local full = { sep, hLabel, status, btn }
-refresh = function()
-  if not DB then return end
-  if DB.hidden then f:Hide(); return end
-  f:Show()
-  if f._scale ~= DB.scale then f._scale = DB.scale; f:SetScale(DB.scale) end
-  local s, text = swap, nil
-  if s then
-    if s.moved then
-      text = (cur and string.format(T("moved"), T("layer") .. " " .. letter(cur.key)) or T("movedNew")) .. ". " .. string.format(T("leaving"), math.max(0, math.ceil((s.leaveAt or 0) - GetTime())))
-    elseif s.joinedAt then text = T("joined")
-    elseif s.inviter then text = string.format(s.manual and T("acceptHint") or T("invited"), s.inviter)
-    elseif s.heard > 0 then text = string.format(T("heard"), s.heard)
-    elseif target then text = string.format(T("goingTo"), letter(target))
-    elseif s.asked and s.asked > 0 then text = string.format(T("asked"), s.asked)
-    else text = T("searching") end
-  elseif DB._status and (not DB._statusUntil or GetTime() < DB._statusUntil) then
-    text = DB._status
+-- the gold pill button; grey while a swap runs, then it says Stop
+local button = CreateFrame("Button", nil, box)
+button:SetSize(90, 22); button:SetPoint("BOTTOM", 0, 10)
+local pill = button:CreateTexture(nil, "BACKGROUND"); pill:SetAllPoints()
+pill:SetTexture(IMG .. "Button"); pill:SetTexCoord(0, 240 / 256, 0, 48 / 64)
+local caption = button:CreateFontString(nil, "OVERLAY"); caption:SetFont(FONT_BOLD, 11, ""); caption:SetPoint("CENTER")
+local function tint()
+  local hot = button.hot
+  if button.busy then
+    pill:SetVertexColor(hot and 0.34 or 0.26, hot and 0.36 or 0.28, hot and 0.42 or 0.33)
+    caption:SetTextColor(0.91, 0.92, 0.94); caption:SetShadowOffset(1, -1); caption:SetShadowColor(0, 0, 0, 0.6)
+  else
+    pill:SetVertexColor(1, hot and 0.88 or 0.8, hot and 0.5 or 0.33)
+    caption:SetTextColor(0.1, 0.08, 0.03); caption:SetShadowOffset(0, 0)
   end
-  local open = DB.open and true or false
-  if f._open ~= open then
-    f._open = open
-    for _, x in ipairs(full) do x:SetShown(open) end
-    if not open then for _, r in ipairs(rows) do r:Hide() end end
+end
+button:SetScript("OnEnter", function() button.hot = true; tint() end)
+button:SetScript("OnLeave", function() button.hot = false; tint(); caption:SetPoint("CENTER", 0, 0) end)
+button:SetScript("OnMouseDown", function() caption:SetPoint("CENTER", 0, -1) end)
+button:SetScript("OnMouseUp", function() caption:SetPoint("CENTER", 0, 0) end)
+button:SetScript("OnClick", function() startSwap() end)
+tint()
+
+box:SetScript("OnDragStart", function(self) self.dragging = true; if not cfg.locked then self:StartMoving() end end)
+box:SetScript("OnDragStop", function(self)
+  self:StopMovingOrSizing()
+  local x, y = self:GetLeft(), self:GetTop()
+  if x and y then self:ClearAllPoints(); self:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x, y); cfg.point = { x, y } end
+end)
+box:SetScript("OnMouseUp", function(self, which)
+  if self.dragging then self.dragging = nil; return end
+  if which == "LeftButton" and cfg then cfg.open = not cfg.open; paint() end
+end)
+box:SetScript("OnEnter", function(self)
+  GameTooltip:SetOwner(self, "ANCHOR_BOTTOM"); GameTooltip:AddLine("LayerETA", 1, 0.82, 0.3)
+  GameTooltip:AddLine(L("hint"), 0.6, 0.6, 0.6); GameTooltip:Show()
+end)
+box:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+local function jobText()
+  local j = job
+  if not j then
+    if cfg._note and GetTime() < (cfg._noteUntil or 0) then return cfg._note end
+    return nil
   end
-  mTop:SetText(blind and "LayerETA" or (T("layer") .. " " .. (cur and letter(cur.key) or "?")))
-  if cur then mTop:SetTextColor(0.62, 0.82, 1) else mTop:SetTextColor(0.91, 0.92, 0.94) end
-  local h = 40
+  if j.movedAt then
+    local left = math.ceil(j.movedAt + (cfg.leaveDelay or 4) - GetTime())
+    return L("leavingIn", math.max(0, left))
+  end
+  if j.inGroupAt then return L("inGroupWait", bare(j.host) or "?") end
+  if j.host then return j.manual and L("acceptIt", bare(j.host) or "?") or L("invitedBy", bare(j.host) or "?") end
+  local n = countHosts()
+  return n > 0 and L("lookingN", n) or L("looking")
+end
+
+paint = function()
+  if not cfg then return end
+  if cfg.hidden then box:Hide(); return end
+  box:Show()
+  if box.scaleNow ~= cfg.scale then box.scaleNow = cfg.scale; box:SetScale(cfg.scale or 1) end
+  head:SetText(L("title"))
+  local status = jobText()
+  local quota = L("quota", Quota.left())
+  local open = cfg.open and true or false
+  rule:SetShown(open); info:SetShown(open); hostLine:SetShown(open); button:SetShown(open)
+  local height = 40
   if open then
-    mSub:SetText(blind and string.format(T("left"), swapsLeft()) or (cur and "LayerETA" or T("unknown")))
-    hLabel:SetText(T("seen"))
-    -- listen: de lag du har vaeret paa i denne zone, nyeste oeverst
-    local hist, list = histFor(), {}
-    for _, item in ipairs(hist) do
-      if type(item) == "table" and not (cur and item.key == cur.key) then list[#list + 1] = item end
-    end
-    local n = 0
-    for i, r in ipairs(rows) do
-      local item = list[i]
-      if item then
-        n = i
-        r.key = item.key
-        r.lt:SetText(letter(item.key))
-        if target == item.key then r.lt:SetTextColor(1, 0.82, 0.32) else r.lt:SetTextColor(0.75, 0.78, 0.84) end
-        r.tt:SetText(date("%H:%M", item.t))
-        r:Show()
-      else
-        r.key = nil; r:Hide()
-      end
-    end
-    hLabel:SetShown(n > 0)
-    local y = (n > 0) and (58 + n * ROW_H + 4) or 46
-    status:ClearAllPoints()
-    status:SetPoint("TOPLEFT", 12, -y); status:SetPoint("TOPRIGHT", -12, -y)
-    status:SetText(text or "")
-    local stop = (s and not s.joinedAt) and true or false
-    local used = not s and swapsLeft() <= 0
-    btxt:SetText(stop and T("stop") or (used and ("Wait " .. waitText())) or (target and string.format(T("back"), letter(target)) or T("swap")))
-    btn:SetWidth(math.max(BTN_W, (btxt:GetStringWidth() or 40) + 26))
-    if btn.stop ~= stop then btn.stop = stop; paintBtn() end
-    h = y + 22 + 10
-    if text then h = h + math.max(11, status:GetStringHeight() or 11) + 6 end
+    sub:SetText(quota)
+    local y = 47
+    info:ClearAllPoints(); info:SetPoint("TOPLEFT", 12, -y); info:SetPoint("TOPRIGHT", -12, -y)
+    info:SetText(status or "")
+    if status then y = y + math.max(11, info:GetStringHeight() or 11) + 6 end
+    hostLine:ClearAllPoints(); hostLine:SetPoint("TOPLEFT", 12, -y); hostLine:SetPoint("TOPRIGHT", -12, -y)
+    local hosted = #Host.recent()
+    hostText:SetText(cfg.host and (hosted > 0 and L("hostCount", hosted) or L("hostOn")) or L("hostOff"))
+    if cfg.host then hostText:SetTextColor(0.62, 0.82, 1) else hostText:SetTextColor(0.45, 0.48, 0.55) end
+    y = y + 14 + 6
+    local busy = job ~= nil and not job.inGroupAt
+    local spent = not job and Quota.left() == 0
+    caption:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swap"))
+    button:SetWidth(math.max(90, (caption:GetStringWidth() or 40) + 26))
+    if button.busy ~= busy then button.busy = busy; tint() end
+    height = y + 22 + 10
   else
-    mSub:SetText(text or (blind and string.format(T("left"), swapsLeft())) or (cur and "LayerETA") or T("unknown"))
+    sub:SetText(status or quota)
   end
-  if f._h ~= h then f._h = h; f:SetHeight(h) end
+  if box.heightNow ~= height then box.heightNow = height; box:SetHeight(height) end
 end
 
--- ---------- haendelser ----------
-local E = CreateFrame("Frame")
-for _, ev in ipairs({ "ADDON_LOADED", "PLAYER_ENTERING_WORLD", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED", "NAME_PLATE_UNIT_ADDED",
-  "ZONE_CHANGED_NEW_AREA", "CHAT_MSG_ADDON", "PARTY_INVITE_REQUEST", "GROUP_JOINED", "GROUP_LEFT",
-  "SHARD_TRANSFER", "GROUP_ROSTER_UPDATE", "WHO_LIST_UPDATE", "PLAYER_REGEN_ENABLED" }) do pcall(E.RegisterEvent, E, ev) end
+-- ===================================================================== events ==
+local events = CreateFrame("Frame")
+local wanted = { "ADDON_LOADED", "PLAYER_ENTERING_WORLD", "PLAYER_REGEN_ENABLED", "CHAT_MSG_ADDON",
+  "PARTY_INVITE_REQUEST", "GROUP_JOINED", "GROUP_ROSTER_UPDATE", "GROUP_LEFT", "SHARD_TRANSFER" }
+for _, ev in ipairs(wanted) do pcall(events.RegisterEvent, events, ev) end
 
-E:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
+local joinedOnce = false
+events:SetScript("OnEvent", function(_, ev, a1, a2, a3, a4)
   if ev == "ADDON_LOADED" then
-    if a1 ~= ADDON then return end
-    LayerETADB = LayerETADB or {}
-    DB = LayerETADB
-    for k, v in pairs(defaults) do if DB[k] == nil then DB[k] = v end end
-    if DB.leaveDelay == 20 then DB.leaveDelay = 4 end   -- den gamle standard var for lang
-    DB.asked, DB.book = nil, DB.book or {}
-    DB._status, DB._statusUntil = nil, nil
-    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX) end
-    if DB.point then f:ClearAllPoints(); f:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", DB.point[1], DB.point[2]) end
-    prune()
+    if a1 ~= NAME then return end
+    LayerETADB = type(LayerETADB) == "table" and LayerETADB or {}
+    cfg = LayerETADB
+    for k, v in pairs(DEFAULTS) do if cfg[k] == nil then cfg[k] = v end end
+    -- data from LayerETA 3.x that this version no longer uses
+    cfg.letters, cfg.hist, cfg.book, cfg.asked, cfg.moves = nil, nil, nil, nil, nil
+    cfg._note, cfg._noteUntil = nil, nil
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then pcall(C_ChatInfo.RegisterAddonMessagePrefix, Net.TAG) end
+    if cfg.point then box:ClearAllPoints(); box:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", cfg.point[1], cfg.point[2]) end
     return
   end
-  if not DB then return end
-  if ev == "PLAYER_REGEN_ENABLED" then combatEnd = GetTime(); return end
-  if ev == "PLAYER_ENTERING_WORLD" then refresh()
-  elseif ev == "UPDATE_MOUSEOVER_UNIT" then observe("mouseover")
-  elseif ev == "PLAYER_TARGET_CHANGED" then observe("target")
-  elseif ev == "NAME_PLATE_UNIT_ADDED" then if str(a1) then observe(a1) end
-  elseif ev == "ZONE_CHANGED_NEW_AREA" then
-    if not swap then target = nil end
-    cur = nil; observe("target"); refresh()  -- laget er zonens: laes det igen i den nye zone
-  elseif ev == "SHARD_TRANSFER" then
-    lastShard = GetTime()
-    -- spillet har flyttet os: det gamle lag gaelder ikke mere, laes det nye fra en NPC
-    cur = nil
-    if swap and swap.joinedAt then onMoved() end
-    observe("target"); observe("mouseover"); refresh()
+  if not cfg then return end
+  if ev == "PLAYER_ENTERING_WORLD" then
+    -- join our channel a little after login, so the game's own channels keep their numbers
+    if not joinedOnce then joinedOnce = true; C_Timer.After(8, Net.join) end
+    paint()
+  elseif ev == "PLAYER_REGEN_ENABLED" then
+    fightEndedAt = GetTime()
   elseif ev == "CHAT_MSG_ADDON" then
-    if not secret(a1) and a1 == PREFIX and not secret(a3) and a3 == "WHISPER" then onNote(a2, a4) end
-  elseif ev == "WHO_LIST_UPDATE" then Who.results()
-  elseif ev == "PARTY_INVITE_REQUEST" then onInvite(a1)
+    if hidden(a1) or a1 ~= Net.TAG or hidden(a3) or a3 ~= "CHANNEL" or not text(a2) or not text(a4) then return end
+    if a4 == myName() or bare(a4) == myName() then return end
+    local parts = Net.split(a2)
+    if parts[1] ~= Net.VERSION then return end
+    Host.onMessage(parts, a4)
+  elseif ev == "PARTY_INVITE_REQUEST" then
+    onInvite(a1)
   elseif ev == "GROUP_JOINED" or ev == "GROUP_ROSTER_UPDATE" then
-    local s = swap
-    if s and s.inviter and not s.joinedAt and IsInGroup and IsInGroup() then
-      s.joinedAt, s.manual = GetTime(), nil
-      refresh()
-    end
+    onJoined()
   elseif ev == "GROUP_LEFT" then
-    if swap and swap.joinedAt then endSwap(swap.moved and (cur and string.format(T("moved"), T("layer") .. " " .. letter(cur.key)) or T("movedNew")) or nil, 10) end
+    if job and job.inGroupAt then finish(job.movedAt and L("moved") or nil, 10) end
+  elseif ev == "SHARD_TRANSFER" then
+    onMoved()
   end
 end)
 
--- et tik i sekundet, kun mens et skift er i gang
 C_Timer.NewTicker(1, function()
-  local s = swap
-  if not s then
-    if DB and DB._statusUntil and GetTime() > DB._statusUntil then DB._status, DB._statusUntil = nil, nil; refresh() end
-    -- the Wait timer on the button, and the swaps that come back after an hour
-    if DB and swapsLeft() < PER_HOUR and math.floor(GetTime()) % 5 == 0 then refresh() end
-    return
-  end
+  if not cfg then return end
   local now = GetTime()
-  if s.joinedAt then
-    -- mens vi venter paa flytningen, laeser vi laget igen hvert sekund fra alt omkring dig.
-    -- Ellers opdager vi foerst skiftet, naar du selv peger paa en NPC.
-    if not s.moved then
-      observe("target"); observe("mouseover")
-      if C_NamePlate and C_NamePlate.GetNamePlates then
-        local ok, plates = pcall(C_NamePlate.GetNamePlates)
-        if ok and type(plates) == "table" then
-          for _, pl in ipairs(plates) do
-            local unit = type(pl) == "table" and (pl.namePlateUnitToken or (pl.UnitFrame and pl.UnitFrame.unit))
-            if str(unit) then observe(unit) end
-          end
-        end
-      end
-    end
-    if s.moved then
-      if now >= (s.leaveAt or 0) then
-        local key = cur and cur.key
-        swap = nil; leaveGroup(); setStatus(key and string.format(T("moved"), T("layer") .. " " .. letter(key)) or T("movedNew"), 15)
-      else refresh() end
-    elseif now - s.joinedAt >= 3 then
-      -- no move 3 s into the host's group (a move comes about a second after the join): the game's mark on
-      -- the host says why. No mark: it stands on your layer. Sharding: the game refused to move you.
-      local mark = hostMark(s.inviter)
-      local who = short(s.inviter) or "?"
-      if mark == "here" then
-        swap = nil; leaveGroup(); setStatus(string.format(T("notMoved"), who), 15)
-      elseif mark == "apart" then
-        swap = nil; leaveGroup(); setStatus(T("refused"), 20)
-      elseif now - s.joinedAt > NO_MOVE_LEAVE then
-        swap = nil; leaveGroup(); setStatus(string.format(T("notMoved"), who), 15)
-      end
-    end
-  end
+  stepJob(now)
+  Host.step(now)
+  if job or (cfg._noteUntil and now < cfg._noteUntil + 1) or Quota.left() < Quota.LIMIT then paint() end
 end)
 
+-- ===================================================================== commands ==
 SLASH_LAYERETA1 = "/leta"
 SLASH_LAYERETA2 = "/layereta"
-SlashCmdList.LAYERETA = function(msg)
-  if not DB then return end
-  msg = string.lower(msg or "")
-  if msg == "swap" then requestSwap()
-  elseif msg == "lock" then DB.locked = not DB.locked; print("|cffffd24aLayerETA|r: " .. T(DB.locked and "locked" or "unlocked"))
-  elseif msg == "debug" then
-    print("|cffffd24aLayerETA|r debug:")
-    print("  player search: " .. tostring(Who.ready()) .. "   asking now: " .. tostring(Who.pending ~= nil))
-    print("  your layer: " .. (blind and "hidden by the game (scrambled GUIDs)" or (cur and (cur.id .. " = " .. letter(cur.key)) or "unknown, target an NPC")))
-    print("  swaps left this hour: " .. swapsLeft() .. "   last move seen: " .. (lastShard and string.format("%ds ago", GetTime() - lastShard) or "none"))
-    print("  zone map id: " .. tostring(zoneMap()))
-    print("  in a group: " .. tostring(IsInGroup and IsInGroup()) .. "   in an instance: " .. tostring(IsInInstance and select(1, IsInInstance())))
-    print("  swap running: " .. tostring(swap ~= nil) .. "   want back to: " .. tostring(target))
-    print("  whispers sent in the last ask: " .. tostring(swap and swap.asked or 0))
-  elseif msg == "da" or msg == "en" then DB.lang = msg; refresh()
-  elseif string.match(msg, "^leave%s+%d+") then DB.leaveDelay = math.min(120, tonumber(string.match(msg, "%d+")) or 4)
-  elseif msg == "help" or msg == "?" then print("|cffffd24aLayerETA|r: " .. T("help"))
-  else DB.hidden = not DB.hidden; refresh() end
+SlashCmdList.LAYERETA = function(input)
+  if not cfg then return end
+  local cmd, arg = string.match(string.lower(input or ""), "^%s*(%S*)%s*(.-)%s*$")
+  if cmd == "swap" then startSwap()
+  elseif cmd == "host" then cfg.host = not cfg.host; say(cfg.host and L("hostNowOn") or L("hostNowOff")); paint()
+  elseif cmd == "channel" then cfg.channel = not cfg.channel; say(cfg.channel and L("chanOn") or L("chanOff"))
+  elseif cmd == "lock" then cfg.locked = not cfg.locked; say(cfg.locked and L("locked") or L("unlocked"))
+  elseif cmd == "leave" and tonumber(arg) then cfg.leaveDelay = math.max(0, math.min(120, tonumber(arg)))
+  elseif cmd == "da" or cmd == "en" then cfg.lang = cmd; paint()
+  elseif cmd == "debug" then
+    say("debug")
+    print("  LayerETA channel: " .. tostring((Net.channelId())) .. "   layer channel: " .. tostring((layerChannel())))
+    print("  zone map id: " .. tostring((zoneId())) .. "   swaps left: " .. Quota.left())
+    print("  hosting: " .. tostring(cfg.host) .. " (" .. #Host.recent() .. " invites in 10 min)   hosts seen: " .. countHosts())
+    print("  swap running: " .. tostring(job ~= nil) .. "   skipped hosts: " .. table.concat(sameLayerHosts(), ", "))
+  elseif cmd == "help" or cmd == "?" then say(L("help"))
+  else cfg.hidden = not cfg.hidden; paint() end
 end
