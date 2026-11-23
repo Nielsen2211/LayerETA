@@ -1,9 +1,11 @@
 ## Interface: 16001
 ## Title: |cffffffffLayer|r|cffffd24aETA|r
-## Notes: Shows the layer you are on and swaps layer with one click. No hosting. Works with LayerSwap, Bulo and Simple Layer hosts.
-## Notes-daDK: Viser hvilket lag du er på, og skifter lag med et klik. Ingen hosting. Virker med hosts fra LayerSwap, Bulo og Simple Layer.
+## Notes: Swaps layer with one click. Asks hosts in your zone for an invite, and LayerETA users can host for each other.
+## Notes-daDK: Skifter lag med et klik. Beder hosts i din zone om en invite, og LayerETA brugere kan hoste for hinanden.
 ## Author: Rasmus
-## Version: 3.9.1
+## X-License: All Rights Reserved
+## Version: 4.0.0
 ## IconTexture: Interface\AddOns\LayerETA\Textures\Logo
 ## SavedVariables: LayerETADB
+LayerSwapAsk.lua
 LayerETA.lua
