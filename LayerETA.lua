@@ -862,7 +862,7 @@ paint = function()
 
   local y = 68
   rule1:ClearAllPoints(); rule1:SetPoint("TOPLEFT", PAD, -y); rule1:SetPoint("TOPRIGHT", -PAD, -y)
-  y = y + 10
+  y = y + 8
 
   -- the three steps, shown while a swap runs and a moment after it moved you
   local now = stage()
@@ -878,44 +878,40 @@ paint = function()
       st.word:SetTextColor(rgb((i < now or now == 3) and C.light or (i == now and C.blue) or C.faint))
     end
   end
-  if now > 0 then y = y + 3 + 5 + 13 + 8 end
+  if now > 0 then y = y + 3 + 4 + 12 + 6 end
 
   local status = jobText()
   msg:SetShown(status ~= nil)
   if status then
     msg:ClearAllPoints(); msg:SetPoint("TOPLEFT", PAD, -y); msg:SetWidth(INNER)
     msg:SetText(status)
-    y = y + math.max(13, msg:GetStringHeight() or 13) + 8
+    y = y + math.max(13, msg:GetStringHeight() or 13) + 6
   end
 
   wide:ClearAllPoints(); wide:SetPoint("TOPLEFT", PAD, -y)
   wide.text:SetText(busy and L("stop") or (spent and L("waitBtn", Quota.untilNext())) or L("swapLayer"))
   wide:SetWidth(math.min(INNER, math.max(96, math.ceil((wide.text:GetStringWidth() or 60) + 36))))
   wide.busy = spent; wide:paint()
-  y = y + 24 + 12
+  y = y + 24 + 10
 
-  hourLeft:ClearAllPoints(); hourLeft:SetPoint("TOPLEFT", PAD, -y); hourLeft:SetText(L("hourLabel"))
-  y = y + 18
+  hourLeft:Hide()
   local tickW = (INNER - 14 * 2) / 15
   for i, t in ipairs(ticks) do
     t:ClearAllPoints(); t:SetPoint("TOPLEFT", PAD + (i - 1) * (tickW + 2), -y); t:SetSize(tickW, 4)
     t:SetVertexColor(rgb(i <= count and C.gold or C.slot))
   end
-  y = y + 4 + 10
+  y = y + 4 + 8
   rule2:ClearAllPoints(); rule2:SetPoint("TOPLEFT", PAD, -y); rule2:SetPoint("TOPRIGHT", -PAD, -y)
   y = y + 2
 
   hostLine:ClearAllPoints(); hostLine:SetPoint("TOPLEFT", PAD, -y); hostLine:SetPoint("TOPRIGHT", -PAD, -y)
   hostText:SetText(L("hostLabel")); drawSwitch()
   y = y + 24
-  hostNote:SetShown(hosting())
-  if hosting() then
-    local hosted = #Host.recent()
-    hostNote:ClearAllPoints(); hostNote:SetPoint("TOPLEFT", PAD, -y)
-    hostNote:SetText(hosted > 0 and L("hostCount", hosted) or L("hosting"))
-    y = y + 16
-  end
-  local height = y + 10
+  local hosted = hosting() and #Host.recent() or 0
+  hostNote:SetShown(hosted > 0)
+  hostNote:ClearAllPoints(); hostNote:SetPoint("LEFT", hostText, "RIGHT", 6, 0)
+  hostNote:SetText("· " .. hosted)
+  local height = y + 8
   if box.heightNow ~= height then box.heightNow = height; box:SetHeight(height) end
 end
 
