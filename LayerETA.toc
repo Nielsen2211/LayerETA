@@ -4,7 +4,7 @@
 ## Notes-daDK: Skifter lag med et klik. Beder hosts i din zone om en invite, og LayerETA brugere kan hoste for hinanden.
 ## Author: Rasmus
 ## X-License: All Rights Reserved
-## Version: 4.2.1
+## Version: 4.2.2
 ## IconTexture: Interface\AddOns\LayerETA\Textures\Logo
 ## SavedVariables: LayerETADB
 LayerETA.lua
